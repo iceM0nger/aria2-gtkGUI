@@ -2,6 +2,8 @@
 
 A download manager for Linux built on [aria2](https://aria2.github.io/), written in Python with GTK4 and libadwaita. The whole app is a single file, `aria2gtk.py`.
 
+![Aria2 GTK downloading four files](screenshots/main.png)
+
 It starts its own private aria2c (JSON-RPC on a random localhost port, with a random secret) and controls it over RPC. Unfinished downloads are saved in a session file and resume the next time the app starts.
 
 ## Features

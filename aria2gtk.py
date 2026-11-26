@@ -99,11 +99,15 @@ list.glow-list > row:selected:hover {
 # ---------------------------------------------------------------- helpers ---
 
 def fmt_size(n):
-    return GLib.format_size(int(n))
+    return GLib.format_size(max(0, int(n)))
 
 
 def fmt_speed(n):
-    return f"{GLib.format_size(int(n))}/s"
+    # aria2 keeps speeds in a 32-bit int: above ~2 GiB/s (local/LAN copies) it wraps negative
+    n = int(n)
+    if n < 0:
+        n += 1 << 32
+    return f"{GLib.format_size(n)}/s"
 
 
 def fmt_clock(seconds):
@@ -4888,7 +4892,8 @@ class App(Adw.Application):
             application_icon="folder-download-symbolic",
             version=VERSION,
             comments="Downloads, torrent creation and seeding with aria2c",
-            license_type=Gtk.License.MIT_X11,
+            license_type=Gtk.License.GPL_3_0,
+            website="https://github.com/iceM0nger/aria2-gtkGUI",
         ).present(self.win)
 
 
