@@ -107,7 +107,10 @@ def fmt_speed(n):
     n = int(n)
     if n < 0:
         n += 1 << 32
-    return f"{GLib.format_size(n)}/s"
+    if n <= 0:
+        return f"{GLib.format_size(n)}/s"
+    bits = GLib.format_size_full(n * 8, GLib.FormatSizeFlags.BITS)
+    return f"{GLib.format_size(n)}/s ({bits}/s)"
 
 
 def fmt_clock(seconds):
@@ -3443,9 +3446,17 @@ class PeersWindow(Adw.Window):
         box.append(has)
         for key in ("downloadSpeed", "uploadSpeed"):
             speed = int(p.get(key, 0) or 0)
-            box.append(Gtk.Label(label=fmt_speed(speed) if speed else "–", xalign=0,
-                                 width_chars=11, css_classes=["numeric"] + ([] if speed
-                                                                            else ["dim-label"])))
+            if speed > 0:
+                cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+                cell.append(Gtk.Label(label=f"{fmt_size(speed)}/s", xalign=0, width_chars=11,
+                                      css_classes=["numeric"]))
+                bits = GLib.format_size_full(speed * 8, GLib.FormatSizeFlags.BITS)
+                cell.append(Gtk.Label(label=f"{bits}/s", xalign=0, width_chars=11,
+                                      css_classes=["numeric", "caption", "dim-label"]))
+                box.append(cell)
+            else:
+                box.append(Gtk.Label(label="–", xalign=0, width_chars=11,
+                                     css_classes=["numeric", "dim-label"]))
         flags = []
         flags.append("it chokes you" if p.get("peerChoking") == "true" else "it sends to you")
         flags.append("you choke it" if p.get("amChoking") == "true" else "you send to it")
