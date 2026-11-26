@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Aria2 GTK
+GenericName=Download Manager
+Comment=Download files, torrents and magnet links with aria2
+Exec=aria2gtk.py %U
+Icon=folder-download
+Terminal=false
+Categories=Network;FileTransfer;P2P;GTK;
+Keywords=aria2;download;torrent;magnet;metalink;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;application/metalink4+xml;application/metalink+xml;
+StartupNotify=true
+StartupWMClass=io.github.aria2gtk
