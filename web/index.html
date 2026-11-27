@@ -425,6 +425,11 @@ function fmtEta(s) {
   return `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h`;
 }
 const pct = f => `${Math.floor(f * 100)}%`;
+// "3 files, 4.2 GB" and "sent 9.1 GB (2.17×)": what a seed shares and how much it has sent
+function sharedText(nfiles, total, sent) {
+  const what = nfiles > 1 ? `${nfiles} files, ${fmtSize(total)}` : fmtSize(total);
+  return [what, `sent ${fmtSize(sent)}${total && sent ? ` (${(sent / total).toFixed(2)}×)` : ""}`];
+}
 
 // ---------------------------------------------------------------- api
 async function api(path, body) {
@@ -521,8 +526,8 @@ function describe(d) {
   const sizes = total ? `${fmtSize(done)} of ${fmtSize(total)} (${pct(frac)})` : "";
   let parts = [], ico = "down", busy = null, bar = frac, pulse = false;
   if (st === "active" && d.seeding) {
-    ico = "seed"; parts = ["Seeding", fmtSize(total), `↑ ${fmtSpeed(up)}`];
-    if (+d.uploadLength) parts.push(`sent ${fmtSize(+d.uploadLength)}`);
+    const [what, sent] = sharedText(d.nfiles, total, +d.sentTotal || 0);
+    ico = "seed"; parts = ["Seeding", what, `↑ ${fmtSpeed(up)}`, sent];
   } else if (st === "active") {
     const [text, f] = activity(d, total, done, down);
     if (text) {
@@ -654,7 +659,8 @@ function describeSeed(v) {
     else if (v.total && v.verified > 0 && v.verified < v.total) {
       text = `Checking the files… ${Math.floor(v.verified * 100 / v.total)}%`; busy = true; bar = v.verified / v.total; }
     else if (v.seeder) {
-      text = ["Seeding", peers(v.peers), `↑ ${fmtSpeed(v.up)}`, `sent ${fmtSize(v.sent)}`].join("  ·  "); }
+      const [what, sent] = sharedText(v.nfiles, v.total, v.sent);
+      text = ["Seeding", what, peers(v.peers), `↑ ${fmtSpeed(v.up)}`, sent].join("  ·  "); }
     else { text = "Starting…"; busy = true; }
   } else if (v.want) { text = "Starting…"; busy = true; }
   else { text = "Stopped"; ico = "paused"; }

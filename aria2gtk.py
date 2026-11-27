@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 
 # ----------------------------------------------------- which Linux this is ---
@@ -916,7 +917,9 @@ class DownloadRow(Gtk.ListBoxRow):
         busy = None
         if st == "active" and total and done >= total and is_bt:
             icon = "emblem-shared-symbolic"
-            parts += ["Seeding", fmt_size(total), f"↑ {fmt_speed(up)}"]
+            what, sent_text = shared_text(len(d.get("files") or []), total,
+                                          self.win.tally.sent(d))
+            parts += ["Seeding", what, f"↑ {fmt_speed(up)}", sent_text]
         elif st == "active":
             busy = self.activity(d, total, done, down, is_bt)
             if busy:
@@ -1283,11 +1286,42 @@ def limit_to_kib(text):
     return int(t) // 1024
 
 
-def describe_seed(d):
+class UploadTally:
+    """Bytes each torrent has sent in total, kept across restarts (aria2 counts from 0 at every
+    start). store: info hash -> bytes, a dict the caller saves (settings.json / server.json)."""
+
+    def __init__(self, store):
+        self.store, self.last, self.dirty = store, {}, False
+
+    def add(self, d):
+        h = d.get("infoHash")
+        if not h:
+            return
+        now = int(d.get("uploadLength") or 0)
+        before = self.last.get(d["gid"], 0)
+        self.last[d["gid"]] = now
+        delta = now - before if now >= before else now     # smaller: aria2 started again
+        if delta > 0:
+            self.store[h] = self.store.get(h, 0) + delta
+            self.dirty = True
+
+    def sent(self, d):
+        h = d.get("infoHash")
+        return self.store.get(h, 0) if h else int(d.get("uploadLength") or 0)
+
+
+def shared_text(nfiles, total, sent):
+    """"3 files, 4.2 GB" and "sent 9.1 GB (2.17×)" for a seeding torrent."""
+    what = f"{nfiles} files, {fmt_size(total)}" if nfiles > 1 else fmt_size(total)
+    ratio = f" ({sent / total:.2f}×)" if total and sent else ""
+    return what, f"sent {fmt_size(sent)}{ratio}"
+
+
+def describe_seed(d, sent=None):
     """aria2 status dict -> (text, running, state)."""
     st = d.get("status", "")
     up = int(d.get("uploadSpeed", 0) or 0)
-    sent = int(d.get("uploadLength", 0) or 0)
+    sent = int(d.get("uploadLength", 0) or 0) if sent is None else sent
     peers = int(d.get("connections", 0) or 0)
     total = int(d.get("totalLength", 0) or 0)
     verified = int(d.get("verifiedLength", 0) or 0)
@@ -1303,8 +1337,9 @@ def describe_seed(d):
     if st == "complete":
         return "Finished", False, "complete"
     if d.get("seeder") == "true":
-        return (f"Seeding  ·  {peers} peer{'s' if peers != 1 else ''}  ·  ↑ {fmt_speed(up)}"
-                f"  ·  sent {fmt_size(sent)}"), True, "active"
+        what, sent_text = shared_text(len(d.get("files") or []), total, sent)
+        return (f"Seeding  ·  {what}  ·  {peers} peer{'s' if peers != 1 else ''}  ·  "
+                f"↑ {fmt_speed(up)}  ·  {sent_text}"), True, "active"
     if d.get("verifyIntegrityPending") == "true":
         return "Waiting to check files…", True, "active"
     if total and 0 < verified < total:
@@ -3205,7 +3240,7 @@ class SeedingPage(Gtk.Box):
             if d:
                 seed["starting"] = False
                 seed["gid"] = d["gid"]
-                text, running, state = describe_seed(d)
+                text, running, state = describe_seed(d, self.win.tally.sent(d))
                 seed["state"] = state
                 row.set_status(text, running, state == "error")
                 if state == "active":
@@ -4464,6 +4499,11 @@ class WebUI:
                 r.url, r.token = live.url, live.token
                 return r
 
+            # Upload totals: the app keeps them (the page only reads them).
+            tally = property(lambda self: SimpleNamespace(add=lambda d: None, dirty=False,
+                                                          sent=win.tally.sent),
+                             lambda self, _v: None)
+
             # The page's Seeding and Create tabs work on the app's own Seeding tab.
             torrent_dir = property(lambda self: Path(win.settings.get(
                 "torrent_dir", os.path.expanduser("~/torrents"))).expanduser())
@@ -4780,6 +4820,7 @@ class Window(Adw.ApplicationWindow):
         self.quitting = False
         self.held = False
         self.settings = settings
+        self.tally = UploadTally(settings.setdefault("uploaded", {}))   # bytes sent per torrent
         self.connect("close-request", self.on_close_request)
         self.tray = Tray(self.toggle_visible, lambda: app.activate_action("quit", None))
 
@@ -5066,6 +5107,7 @@ class Window(Adw.ApplicationWindow):
         seed_hashes = self.seeding.hashes()
         seed_items = {}
         for d in [*active, *waiting, *stopped]:
+            self.tally.add(d)
             if is_metadata_done(d):              # internal magnet step: never list it
                 if d["gid"] not in self.tidied:
                     self.tidied.add(d["gid"])
@@ -5179,10 +5221,16 @@ class Window(Adw.ApplicationWindow):
     # -- housekeeping: logs and the country database ----------------------------
 
     def housekeeping(self):
-        """Every minute: keep aria2.log small while aria2c runs."""
+        """Every minute: keep aria2.log small while aria2c runs; save the upload totals."""
         if self.settings.get("log_autotrim", True):
             trim_log()
+        self.save_tally()
         return True
+
+    def save_tally(self):
+        if self.tally.dirty:
+            self.tally.dirty = False
+            save_settings(self.settings)
 
     def check_big_logs(self):
         big = [(p, s) for p, _k, s in log_files() if s > LOG_LIMIT]
@@ -5790,6 +5838,7 @@ class App(Adw.Application):
         if self.win:
             self.win.tray.close()
             self.win.web.stop()
+            self.win.save_tally()
         self.daemon.stop()
         Adw.Application.do_shutdown(self)
 

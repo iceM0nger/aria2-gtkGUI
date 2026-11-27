@@ -915,6 +915,31 @@ class Aria2:
         return out
 
 
+class UploadTally:
+    """Bytes each torrent has sent in total, kept across restarts (aria2 counts from 0 at every
+    start). store: info hash -> bytes, a dict the caller saves (settings.json / server.json)."""
+
+    def __init__(self, store):
+        self.store, self.last, self.dirty = store, {}, False
+
+    def add(self, d):
+        h = d.get("infoHash")
+        if not h:
+            return
+        now = int(d.get("uploadLength") or 0)
+        before = self.last.get(d["gid"], 0)
+        self.last[d["gid"]] = now
+        delta = now - before if now >= before else now     # smaller: aria2 started again
+        if delta > 0:
+            self.store[h] = self.store.get(h, 0) + delta
+            self.dirty = True
+
+    def sent(self, d):
+        h = d.get("infoHash")
+        return self.store.get(h, 0) if h else int(d.get("uploadLength") or 0)
+
+
+
 # ------------------------------------------------------------------ engine ---
 
 class Engine:
@@ -933,6 +958,7 @@ class Engine:
         self.seed_status = {}     # info hash -> (gid, status) from the last state()
         self.seed_errors = {}
         self.job = {}
+        self.tally = UploadTally(cfg.setdefault("uploaded", {}))   # bytes sent per torrent
 
     def start(self):
         trim_log()
@@ -974,8 +1000,14 @@ class Engine:
                 time.sleep(0.2)
         raise RuntimeError("aria2c did not answer on its RPC port")
 
+    def save_tally(self):
+        if self.tally.dirty:
+            self.tally.dirty = False
+            save_config(self.cfg)
+
     def stop(self):
         self.stopping = True
+        self.save_tally()
         if self.proc and self.proc.poll() is None:
             try:
                 self.rpc.call("aria2.forceShutdown", timeout=2)   # saves the session
@@ -1008,6 +1040,7 @@ class Engine:
             if now - last_trim > 60:
                 last_trim = now
                 trim_log()
+                self.save_tally()
             if now - last_geo > 86400 and self.cfg.get("geo_auto", True):
                 last_geo = now
                 threading.Thread(target=self.update_geo, daemon=True).start()
@@ -1036,6 +1069,7 @@ class Engine:
         own = {s["hash"] for s in seeds if s["hash"]}
         seed_items = {}
         for d in [*active, *waiting, *stopped]:
+            self.tally.add(d)
             if d.get("infoHash") in own:
                 seed_items.setdefault(d["infoHash"], d)   # newest first: active, waiting, stopped
                 continue
@@ -1051,7 +1085,7 @@ class Engine:
                 drop.append(d["gid"])
                 del drop[:-200]
                 dirty = True
-            items.append(slim(d))
+            items.append({**slim(d), "sentTotal": self.tally.sent(d)})
         if dirty:
             save_config(self.cfg)
         try:
@@ -1313,7 +1347,8 @@ class Engine:
              "limit": s.get("upload_limit"), "error": s.get("error") or "", "status": "stopped"}
         if d:
             v.update(gid=d["gid"], status=d["status"], up=int(d.get("uploadSpeed") or 0),
-                     peers=int(d.get("connections") or 0), sent=int(d.get("uploadLength") or 0),
+                     peers=int(d.get("connections") or 0), sent=self.tally.sent(d),
+                     nfiles=len(d.get("files") or []),
                      total=int(d.get("totalLength") or 0),
                      verified=int(d.get("verifiedLength") or 0),
                      pending=d.get("verifyIntegrityPending") == "true",
