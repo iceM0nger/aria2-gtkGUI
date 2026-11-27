@@ -398,6 +398,102 @@ class Daemon:
 
 # ------------------------------------------------------------------- rows ---
 
+LIMIT_STEPS = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 0]
+LIMIT_KEYS = {"down": "max-download-limit", "up": "max-upload-limit"}   # KiB/s, 0 = unlimited
+
+
+def limit_text(kib):
+    return "Unlimited" if not kib else fmt_speed(kib * 1024)
+
+
+def limit_step(kib):
+    """Slider position for a limit in KiB/s (the nearest step; unlimited is the far right)."""
+    if not kib:
+        return len(LIMIT_STEPS) - 1
+    return min(range(len(LIMIT_STEPS) - 1),
+               key=lambda i: abs(math.log(LIMIT_STEPS[i]) - math.log(kib)))
+
+
+def limit_note(limits):
+    """'max ↓ 2,1 MB/s ↑ 524,3 kB/s' for a row's subtitle, or ''."""
+    bits = [f"{arrow} {fmt_size(limits[k] * 1024)}/s" for k, arrow in (("down", "↓"), ("up", "↑"))
+            if limits.get(k)]
+    return "max " + " ".join(bits) if bits else ""
+
+
+class SpeedLimitPopover(Gtk.Popover):
+    """Right-click on a download or seed: sliders for its own upload / download limit."""
+
+    def __init__(self, parent, title, kinds, limits, apply):
+        super().__init__(autohide=True, has_arrow=True)
+        self.limits, self.apply, self.timer = dict(limits), apply, 0
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=330,
+                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
+        box.append(Gtk.Label(label="Speed Limits", xalign=0, css_classes=["heading"]))
+        box.append(Gtk.Label(label=title, xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE,
+                             max_width_chars=40, css_classes=["dim-label", "caption"]))
+        self.scales = {}
+        for kind in kinds:
+            head = Gtk.Box(spacing=6)
+            head.append(Gtk.Label(label="Upload" if kind == "up" else "Download", xalign=0,
+                                  hexpand=True))
+            value = Gtk.Label(xalign=1, css_classes=["numeric", "dim-label"])
+            head.append(value)
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0,
+                                             len(LIMIT_STEPS) - 1, 1)
+            scale.set_draw_value(False)
+            scale.set_round_digits(0)
+            for i in (0, LIMIT_STEPS.index(1024), LIMIT_STEPS.index(16384)):
+                scale.add_mark(i, Gtk.PositionType.BOTTOM, limit_text(LIMIT_STEPS[i]).split(" (")[0])
+            scale.add_mark(len(LIMIT_STEPS) - 1, Gtk.PositionType.BOTTOM, "∞")
+            scale.set_value(limit_step(self.limits.get(kind, 0)))
+            value.set_label(limit_text(self.limits.get(kind, 0)))
+            scale.connect("value-changed", self.on_changed, kind, value)
+            self.scales[kind] = scale
+            box.append(head)
+            box.append(scale)
+        reset = Gtk.Button(label="No Limits", halign=Gtk.Align.END, css_classes=["flat"])
+        reset.connect("clicked", lambda _b: [sc.set_value(len(LIMIT_STEPS) - 1)
+                                              for sc in self.scales.values()])
+        box.append(reset)
+        self.set_child(box)
+        self.set_parent(parent)
+        self.connect("closed", lambda *_: GLib.idle_add(self._done))
+
+    def on_changed(self, scale, kind, value):
+        kib = LIMIT_STEPS[int(round(scale.get_value()))]
+        value.set_label(limit_text(kib))
+        self.limits[kind] = kib
+        if self.timer:
+            GLib.source_remove(self.timer)
+        self.timer = GLib.timeout_add(250, self._send)   # don't flood aria2c while dragging
+
+    def _send(self):
+        self.timer = 0
+        self.apply(dict(self.limits))
+        return False
+
+    def _done(self):
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self._send()
+        self.unparent()
+        return False
+
+
+def popup_at(widget, popover, x, y):
+    rect = Gdk.Rectangle()
+    rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+    popover.set_pointing_to(rect)
+    popover.popup()
+
+
+def on_right_click(widget, callback):
+    click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+    click.connect("pressed", lambda g, _n, x, y: callback(x, y))
+    widget.add_controller(click)
+
+
 class DownloadRow(Gtk.ListBoxRow):
     def __init__(self, win, gid):
         super().__init__(activatable=False, selectable=True)
@@ -454,6 +550,53 @@ class DownloadRow(Gtk.ListBoxRow):
         outer.append(top)
         outer.append(self.progress)
         self.set_child(outer)
+        self.limits = {}            # own limits in KiB/s ("up" / "down"), 0 = none
+        self.set_tooltip_text("Right-click for speed limits")
+        on_right_click(self, self.show_limits)
+        self.read_limits()
+
+    def read_limits(self):
+        rpc = self.win.rpc
+        if not rpc:
+            return
+
+        def work():
+            try:
+                o = rpc.call("aria2.getOption", self.gid)
+            except Exception:  # noqa: BLE001
+                return
+            GLib.idle_add(self._got_limits, {k: limit_to_kib(o.get(key, "0"))
+                                             for k, key in LIMIT_KEYS.items()})
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _got_limits(self, limits):
+        self.limits = limits
+        if self.data:
+            self.update(self.data)
+        return False
+
+    def show_limits(self, x, y):
+        d = self.data
+        total, done = int(d.get("totalLength", 0) or 0), int(d.get("completedLength", 0) or 0)
+        finished = d.get("status") == "complete" or (total and done >= total)
+        if d.get("status") in ("complete", "removed", "error") and not d.get("bittorrent"):
+            self.win.toast("Speed limits apply to downloads that are still running")
+            return
+        kinds = (["up"] if finished else ["down"]) + ([] if finished or not d.get("bittorrent")
+                                                      else ["up"])
+        popup_at(self, SpeedLimitPopover(self, name_of(d), kinds, self.limits,
+                                         self.set_limits), x, y)
+
+    def set_limits(self, limits):
+        self.limits = limits
+        opts = {key: f"{limits.get(k, 0)}K" if limits.get(k) else "0"
+                for k, key in LIMIT_KEYS.items()}
+        rpc, gid = self.win.rpc, self.gid
+        if rpc:
+            self.win.run(lambda: rpc.call("aria2.changeOption", gid, opts))
+        if self.data:
+            self.update(self.data)
 
     def update(self, d):
         self.data = d
@@ -511,6 +654,9 @@ class DownloadRow(Gtk.ListBoxRow):
             parts.append("Removed")
         if st != "active":                  # waits/stalls are timed from the next start
             self.last_done, self.since, self.moved = None, time.monotonic(), False
+        note = limit_note(self.limits) if st in ("active", "waiting", "paused") else ""
+        if note:
+            parts.append(note)
         self.icon_stack.set_visible_child_name("busy" if busy else "icon")
         self.icon.set_from_icon_name(icon)
         self.subtitle.set_label("  ·  ".join(parts))
@@ -2333,13 +2479,26 @@ class SeedRow(Adw.ActionRow):
         for btn in (self.toggle, peers, folder, remove):
             self.add_suffix(btn)
         self.error = False
+        self.page, self.seed, self.status_text = page, seed, ""
+        on_right_click(self, self.show_limits)
         self.set_status("Stopped", False)
+
+    def show_limits(self, x, y):
+        kib = self.seed.get("upload_limit")
+        if kib is None:
+            kib = limit_to_kib(self.page.win.settings.get("seed_upload_limit", "0"))
+        popup_at(self, SpeedLimitPopover(self, self.get_title(), ["up"], {"up": kib},
+                                         lambda lim: self.page.set_seed_limit(self.seed,
+                                                                              lim["up"])), x, y)
 
     def set_status(self, text, running, error=False):
         self.error = error
+        self.status_text, self.running = text, running
         # spinner while it starts / checks files / fetches data, icon once it seeds
         busy = running and not error and not text.startswith("Seeding")
         self.icon_stack.set_visible_child_name("busy" if busy else "icon")
+        if self.seed.get("upload_limit"):
+            text += f"  ·  max ↑ {fmt_size(self.seed['upload_limit'] * 1024)}/s"
         self.set_subtitle(GLib.markup_escape_text(text))
         if error:
             self.add_css_class("error")
@@ -2392,23 +2551,26 @@ class SeedingPage(Gtk.Box):
 
         for item in win.settings.get("seeds", []):
             if isinstance(item, dict) and item.get("torrent") and item.get("source"):
-                self._add_entry(item["torrent"], item["source"], item.get("want", True))
+                self._add_entry(item["torrent"], item["source"], item.get("want", True),
+                                item.get("upload_limit"))
 
     # -- list
 
-    def _add_entry(self, torrent, source, want=True):
+    def _add_entry(self, torrent, source, want=True, upload_limit=None):
         meta = torrent_meta(torrent)
         seed = {"torrent": torrent, "source": source, "want": want, "gid": None, "state": "",
                 "starting": False, "hash": meta[0] if meta else None,
-                "name": meta[1] if meta else ""}
+                "name": meta[1] if meta else "", "upload_limit": upload_limit}
         seed["row"] = SeedRow(self, seed)
         self.seeds.append(seed)
         self.listbox.append(seed["row"])
         return seed
 
     def save(self):
-        self.win.settings["seeds"] = [{"torrent": s["torrent"], "source": s["source"],
-                                       "want": s["want"]} for s in self.seeds]
+        self.win.settings["seeds"] = [
+            {"torrent": s["torrent"], "source": s["source"], "want": s["want"],
+             **({"upload_limit": s["upload_limit"]} if s.get("upload_limit") is not None else {})}
+            for s in self.seeds]
         save_settings(self.win.settings)
 
     def hashes(self):
@@ -2476,11 +2638,26 @@ class SeedingPage(Gtk.Box):
 
     # -- engine control
 
-    def seed_options(self, src):
+    def seed_limit(self, seed):
+        """This seed's own upload limit for aria2, else the Preferences one."""
+        if seed and seed.get("upload_limit") is not None:
+            return f"{seed['upload_limit']}K" if seed["upload_limit"] else "0"
+        return norm_limit(self.win.settings.get("seed_upload_limit", "0"))
+
+    def set_seed_limit(self, seed, kib):
+        seed["upload_limit"] = kib
+        self.save()
+        seed["row"].set_status(seed["row"].status_text, seed["row"].running, seed["row"].error)
+        rpc, gid = self.win.rpc, seed.get("gid")
+        if rpc and gid:
+            limit = self.seed_limit(seed)
+            self.win.run(lambda: rpc.call("aria2.changeOption", gid, {"max-upload-limit": limit}))
+
+    def seed_options(self, src, seed=None):
         # rpc-save-upload-metadata off: otherwise aria2 drops <infohash>.torrent next to your data
         opts = {"dir": os.path.dirname(src), "check-integrity": "true", "seed-ratio": "0.0",
                 "seed-time": SEED_FOREVER, "rpc-save-upload-metadata": "false",
-                "max-upload-limit": norm_limit(self.win.settings.get("seed_upload_limit", "0"))}
+                "max-upload-limit": self.seed_limit(seed)}
         ip = (self.win.settings.get("external_ip") or "").strip()
         if ip:
             opts["bt-external-ip"] = ip
@@ -2517,7 +2694,7 @@ class SeedingPage(Gtk.Box):
         seed["want"], seed["starting"] = True, True
         self.save()
         row.set_status("Starting…", True)
-        opts, info_hash = self.seed_options(src), seed["hash"]
+        opts, info_hash = self.seed_options(src, seed), seed["hash"]
 
         def work():
             try:
@@ -2598,7 +2775,7 @@ class SeedingPage(Gtk.Box):
     def apply_upload_limit(self):
         rpc = self.win.rpc
         limit = norm_limit(self.win.settings.get("seed_upload_limit", "0"))
-        gids = [s["gid"] for s in self.seeds if s.get("gid")]
+        gids = [s["gid"] for s in self.seeds if s.get("gid") and s.get("upload_limit") is None]
         if not rpc or not gids:
             return
 
