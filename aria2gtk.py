@@ -3759,12 +3759,16 @@ def draw_banner(cr, w, h, t, fg, accent, state):
     cr.rectangle(0, 0, w, h)
     cr.fill()
 
-    # 2. download history graph behind the speeds (right side)
+    # 2. speed history behind the speeds (right side): download as a filled area,
+    #    upload as a thin light line on the same scale, so a greedy seed shows at a glance
     hist = list(state["history"])
+    uhist = list(state["up_history"])
     gx0, gx1 = max(w - 320, w * 0.55), w - 12
-    top = max(hist) or 1
+    top = max(hist + uhist) or 1
+    step = (gx1 - gx0) / max(len(hist) - 1, 1)
+    up_col = (min(1, ar * 0.35 + 0.65), min(1, ag * 0.35 + 0.65), min(1, ab * 0.35 + 0.65))
+    peak = None
     if any(hist):
-        step = (gx1 - gx0) / max(len(hist) - 1, 1)
         pts = [(gx0 + i * step, h - 6 - h * 0.46 * (v / top)) for i, v in enumerate(hist)]
         cr.move_to(gx0, h)
         for x, y in pts:
@@ -3782,6 +3786,18 @@ def draw_banner(cr, w, h, t, fg, accent, state):
         cr.set_source_rgba(ar, ag, ab, 0.85)
         cr.set_line_width(1.4)
         cr.stroke()
+        i_max = max(range(len(hist)), key=lambda i: (hist[i], i))   # latest of equal peaks
+        peak = (*pts[i_max], hist[i_max])
+    if any(uhist):
+        upts = [(gx0 + i * step, h - 6 - h * 0.46 * (v / top)) for i, v in enumerate(uhist)]
+        cr.move_to(*upts[0])
+        for x, y in upts[1:]:
+            cr.line_to(x, y)
+        cr.set_source_rgba(*up_col, 0.75)
+        cr.set_line_width(1.1)
+        cr.set_dash([4, 3])
+        cr.stroke()
+        cr.set_dash([])
 
     # 3+4 drawn into a group, then faded behind the title and the speeds so text stays clear
     cr.push_group()
@@ -3883,14 +3899,51 @@ def draw_banner(cr, w, h, t, fg, accent, state):
     cr.move_to(tx, h / 2 + 15)
     PangoCairo.show_layout(cr, lay)
 
-    # 7. live speeds, right aligned
-    for text, font, y, alpha in ((f"↓ {fmt_speed(state['down'])}", "Sans Bold 15", h / 2 - 24, 0.97),
-                                 (f"↑ {fmt_speed(state['up'])}", "Sans 10.5", h / 2 + 4, 0.7)):
+    # 8a. peak marker dot, under the speed text so the numbers stay readable
+    if peak and peak[2] > 0:
+        px, py, _value = peak
+        pulse = 0.5 + 0.5 * math.sin(t * 2.4)
+        halo = cairo.RadialGradient(px, py, 0, px, py, 9)
+        halo.add_color_stop_rgba(0, ar, ag, ab, 0.55 + 0.25 * pulse)
+        halo.add_color_stop_rgba(1, ar, ag, ab, 0)
+        cr.set_source(halo)
+        cr.arc(px, py, 9, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.arc(px, py, 2.4, 0, 2 * math.pi)
+        cr.fill()
+
+    # 7. live speeds, right aligned (upload in the colour of its graph line)
+    boxes = []
+    for text, font, y, alpha, col in (
+            (f"↓ {fmt_speed(state['down'])}", "Sans Bold 15", h / 2 - 24, 0.97, (fr, fgc, fb)),
+            (f"↑ {fmt_speed(state['up'])}", "Sans 10.5", h / 2 + 4, 0.75,
+             up_col if state["up"] else (fr, fgc, fb))):
         lay = _layout(cr, text, font)
-        tw = lay.get_pixel_size()[0]
-        cr.set_source_rgba(fr, fgc, fb, alpha)
+        tw, th = lay.get_pixel_size()
+        cr.set_source_rgba(*col, alpha)
         cr.move_to(w - 24 - tw, y)
         PangoCairo.show_layout(cr, lay)
+        boxes.append((w - 24 - tw - 6, y - 2, w, y + th + 2))
+
+    # 8b. peak label, next to the dot where it fits, else at the graph's bottom left
+    if peak and peak[2] > 0:
+        px, py, value = peak
+        lay = _layout(cr, f"peak {fmt_size(value)}/s", "Sans Bold 7.5")
+        lw, lh = lay.get_pixel_size()
+
+        def free(x, y):
+            return (gx0 - 40 <= x and x + lw <= w - 4 and 2 <= y and y + lh <= h - 2 and
+                    not any(x < bx1 and x + lw > bx0 and y < by1 and y + lh > by0
+                            for bx0, by0, bx1, by1 in boxes))
+
+        spots = [(px + 7, py - lh - 3), (px - lw - 7, py - lh - 3),
+                 (px + 7, py + 3), (px - lw - 7, py + 3), (gx0 + 4, h - lh - 4)]
+        spot = next((xy for xy in spots if free(*xy)), None)
+        if spot:
+            cr.set_source_rgba(fr, fgc, fb, 0.8)
+            cr.move_to(*spot)
+            PangoCairo.show_layout(cr, lay)
 
 
 class Banner(Gtk.DrawingArea):
@@ -3902,7 +3955,8 @@ class Banner(Gtk.DrawingArea):
     def __init__(self):
         super().__init__(content_height=self.HEIGHT, hexpand=True)
         self.state = {"down": 0, "up": 0, "active": 0, "seeding": 0,
-                      "history": deque([0] * 90, maxlen=90), "visible_particles": 6,
+                      "history": deque([0] * 90, maxlen=90),
+                      "up_history": deque([0] * 90, maxlen=90), "visible_particles": 6,
                       "particles": []}
         rnd = random.Random(7)
         for k in range(self.PARTICLES):
@@ -3921,6 +3975,7 @@ class Banner(Gtk.DrawingArea):
         st = self.state
         st.update(down=int(down), up=int(up), active=active, seeding=seeding)
         st["history"].append(int(down))
+        st["up_history"].append(int(up))
         energy = _speed_energy(st["down"], st["up"])
         st["visible_particles"] = int(6 + (self.PARTICLES - 6) * energy)
         self.queue_draw()
