@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Aria2 GTK · Web</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root {
+  --accent: #c061cb; --accent-bg: #9141ac;
+  --bg: #222226; --view: #1d1d20; --card: #2e2e32; --card-hover: #36363b;
+  --fg: #ffffff; --dim: rgba(255,255,255,.6); --line: rgba(255,255,255,.09);
+  --error: #ff7b63; --warn: #f8e45c; --ok: #8ff0a4;
+  --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,.35);
+  font-family: "Cantarell", "Inter", "Noto Sans", system-ui, sans-serif;
+  font-size: 15px;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #fafafb; --view: #ffffff; --card: #ffffff; --card-hover: #f2f2f4;
+          --fg: rgba(0,0,6,.85); --dim: rgba(0,0,6,.55); --line: rgba(0,0,6,.08);
+          --error: #c01c28; --warn: #9c6e03; --ok: #1b8553; --shadow: 0 1px 3px rgba(0,0,6,.12); }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+body { display: flex; flex-direction: column; }
+button { font: inherit; color: inherit; }
+.num { font-variant-numeric: tabular-nums; }
+.dim { color: var(--dim); }
+.hidden { display: none !important; }
+
+/* header bar */
+header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
+header .title { flex: 1; text-align: center; font-weight: 700; }
+.btn { border: 0; background: transparent; border-radius: 8px; padding: 7px 12px; cursor: pointer;
+       display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.btn.raised { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.btn.suggested { background: var(--accent-bg); color: #fff; }
+.btn.suggested:hover { background: color-mix(in srgb, var(--accent-bg) 85%, #fff); }
+.btn.destructive { background: color-mix(in srgb, var(--error) 80%, #000); color: #fff; }
+.btn.circle { width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 50%; }
+.btn:disabled { opacity: .45; cursor: default; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
+        stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* banner */
+#banner { display: block; width: 100%; height: 92px; }
+.banner-wrap { position: relative; }
+
+/* tabs */
+nav.tabs { display: flex; justify-content: center; gap: 4px; padding: 8px; flex-wrap: wrap; }
+nav.tabs .btn { position: relative; }
+nav.tabs .btn.on { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.badge { position: absolute; top: 0; left: 8px; min-width: 16px; height: 16px; border-radius: 8px;
+         background: color-mix(in srgb, var(--fg) 30%, var(--bg)); font-size: 10px; display: grid;
+         place-items: center; padding: 0 4px; font-weight: 700; }
+
+/* list */
+main { flex: 1; overflow: auto; padding: 4px 16px 16px; }
+.list { max-width: 900px; margin: 0 auto; background: var(--card); border-radius: var(--radius);
+        box-shadow: var(--shadow); overflow: hidden; }
+.empty { max-width: 900px; margin: 60px auto; text-align: center; color: var(--dim); }
+.empty .big { font-size: 20px; font-weight: 700; color: var(--fg); margin: 10px 0 4px; }
+.row { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line);
+       transition: background .2s, box-shadow .25s; cursor: default; }
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--card-hover); }
+.row.sel { background: color-mix(in srgb, var(--accent-bg) 14%, var(--card));
+           box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 85%, transparent),
+                       inset 0 0 14px 1px color-mix(in srgb, var(--accent) 30%, transparent);
+           border-radius: var(--radius); }
+.row .top { display: flex; align-items: center; gap: 12px; }
+.row .ico { width: 32px; height: 32px; flex: none; display: grid; place-items: center; }
+.row .ico svg { width: 28px; height: 28px; stroke-width: 2.2; }
+.row .txt { flex: 1; min-width: 0; }
+.row .name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .sub { font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.err .sub { color: var(--error); }
+.row .acts { display: flex; gap: 2px; flex: none; }
+.chip { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px; border: 0; cursor: pointer;
+        background: var(--accent-bg); color: #fff; animation: glow 1.6s ease-in-out infinite; }
+@keyframes glow { 50% { box-shadow: 0 0 12px var(--accent); } }
+.bar { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 12%, transparent); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .6s; }
+.bar.pulse > i { width: 25% !important; animation: slide 1.4s ease-in-out infinite alternate; }
+@keyframes slide { from { margin-left: 0 } to { margin-left: 75% } }
+.spin { width: 26px; height: 26px; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--fg) 18%, transparent);
+        border-top-color: var(--accent); animation: rot 1s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* status bar */
+footer { display: flex; justify-content: center; gap: 14px; padding: 6px 10px 8px; font-size: 12.5px; color: var(--dim); flex-wrap: wrap; }
+#beat { transition: color 1s; }
+#beat.on { color: var(--accent); transition: none; }
+
+/* dialogs */
+dialog { border: 0; border-radius: 16px; padding: 0; background: var(--view); color: var(--fg);
+         box-shadow: 0 10px 40px rgba(0,0,0,.5); width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 40px); }
+dialog.wide { width: min(860px, calc(100vw - 24px)); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+.dlg { display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
+.dlg h2 { margin: 0; font-size: 17px; text-align: center; padding: 16px 16px 6px; }
+.dlg .body { padding: 10px 18px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.dlg .foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px 16px; }
+.group { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); }
+.group > * + * { border-top: 1px solid var(--line); }
+.field { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.field label { flex: 1; }
+.field small { display: block; color: var(--dim); font-size: 12px; }
+input[type=text], input[type=password], input[type=number], textarea, select {
+  font: inherit; color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent);
+  border: 1px solid transparent; border-radius: 8px; padding: 8px 10px; outline: none; }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { width: 100%; min-height: 110px; resize: vertical; }
+input[type=range] { accent-color: var(--accent); width: 100%; }
+input[type=checkbox] { accent-color: var(--accent); width: 18px; height: 18px; }
+.hint { font-size: 12.5px; color: var(--dim); }
+.drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 14px; text-align: center;
+        color: var(--dim); cursor: pointer; }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th { text-align: left; font-size: 12px; color: var(--dim); font-weight: 600; padding: 6px 8px; position: sticky; top: 0; background: var(--card); }
+td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+td .two { display: flex; flex-direction: column; }
+td .two small { color: var(--dim); font-size: 11px; }
+.mini { height: 5px; width: 90px; }
+.flag { font-family: "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif; font-size: 18px; }
+
+/* popover */
+.pop { position: fixed; z-index: 50; background: var(--view); border-radius: 12px; padding: 12px 14px; width: 330px;
+       box-shadow: 0 8px 30px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 8px; }
+.pop .lab { display: flex; justify-content: space-between; font-size: 14px; }
+.ticks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--dim); margin-top: -4px; }
+
+/* toasts */
+#toasts { position: fixed; bottom: 46px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column;
+          gap: 6px; align-items: center; z-index: 60; pointer-events: none; }
+.toast { background: color-mix(in srgb, var(--fg) 88%, var(--bg)); color: var(--bg); padding: 9px 16px; border-radius: 99px;
+         font-weight: 600; font-size: 14px; box-shadow: var(--shadow); animation: up .25s; max-width: 90vw; }
+@keyframes up { from { transform: translateY(12px); opacity: 0 } }
+
+/* login */
+#login { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 70; }
+#login form { width: min(360px, 92vw); display: flex; flex-direction: column; gap: 12px; text-align: center; }
+#login img { width: 84px; margin: 0 auto; filter: drop-shadow(0 4px 18px var(--accent-bg)); }
+#login .err { color: var(--error); min-height: 1.2em; font-size: 14px; }
+
+@media (max-width: 640px) {
+  main { padding: 4px 6px 12px; }
+  .row .acts .opt { display: none; }
+  nav.tabs .btn span.t { display: none; }
+  header .title { font-size: 14px; }
+}
+</style>
+</head>
+<body>
+
+<div id="login" class="hidden">
+  <form autocomplete="on">
+    <img src="/favicon.svg" alt="">
+    <h2 style="margin:6px 0 0">Aria2 GTK</h2>
+    <div class="dim">Sign in to your download server</div>
+    <input type="text" name="username" value="aria2gtk" autocomplete="username" hidden>
+    <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="btn suggested" style="justify-content:center">Sign In</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+</div>
+
+<header>
+  <button class="btn suggested" id="addBtn" title="Add downloads (N)">
+    <svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Add</span></button>
+  <div class="title">Downloads</div>
+  <button class="btn circle" id="pauseAllBtn" title="Pause or resume everything">
+    <svg class="i" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg></button>
+  <button class="btn circle" id="settingsBtn" title="Settings">
+    <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  <button class="btn circle" id="logoutBtn" title="Sign out">
+    <svg class="i" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+</header>
+
+<div class="banner-wrap"><canvas id="banner"></canvas></div>
+
+<nav class="tabs" id="tabs">
+  <button class="btn on" data-tab="active"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v9M8.5 12.5 12 16l3.5-3.5"/></svg><span class="t">Downloading</span><b class="badge hidden"></b></button>
+  <button class="btn" data-tab="queued"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9"/></svg><span class="t">Queued</span><b class="badge hidden"></b></button>
+  <button class="btn" data-tab="done"><svg class="i" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span class="t">Finished</span><b class="badge hidden"></b></button>
+</nav>
+
+<main>
+  <div class="list" id="list"></div>
+  <div class="empty hidden" id="empty">
+    <svg class="i" viewBox="0 0 24 24" style="width:64px;height:64px;opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v9M8.5 12.5 12 16l3.5-3.5"/></svg>
+    <div class="big" id="emptyTitle">Nothing here</div><div id="emptyText"></div>
+  </div>
+</main>
+
+<footer>
+  <span id="beat" title="Flashes each time the server answers">●</span>
+  <span id="sDown" class="num"></span><span id="sUp" class="num"></span>
+  <span id="sCount"></span><span id="sDisk" class="num"></span>
+</footer>
+
+<div id="toasts"></div>
+
+<!-- Add -->
+<dialog id="addDlg"><form class="dlg" method="dialog">
+  <h2>Add Downloads</h2>
+  <div class="body">
+    <textarea id="links" placeholder="Links, one per line: https://…, ftp://…, magnet:?xt=…"></textarea>
+    <div class="drop" id="drop">Drop <b>.torrent</b> or <b>.metalink</b> files here, or click to choose
+      <input type="file" id="fileIn" accept=".torrent,.metalink,.meta4" multiple hidden></div>
+    <div id="fileList" class="hint"></div>
+    <div class="group">
+      <div class="field"><label>Folder<small id="dirBase"></small></label>
+        <input type="text" id="dirIn" list="dirList" placeholder="(download folder)" style="width:55%"></div>
+      <datalist id="dirList"></datalist>
+      <div class="field"><label for="chooseIn">Choose files before downloading<small>For torrents and magnet links</small></label>
+        <input type="checkbox" id="chooseIn"></div>
+    </div>
+  </div>
+  <div class="foot"><button class="btn raised" value="cancel">Cancel</button>
+    <button class="btn suggested" id="addGo" value="go">Download</button></div>
+</form></dialog>
+
+<!-- Files -->
+<dialog id="filesDlg" class="wide"><form class="dlg" method="dialog">
+  <h2 id="filesTitle">Choose Files</h2>
+  <div class="body">
+    <div style="display:flex;gap:8px;align-items:center">
+      <button type="button" class="btn raised" id="fAll">All</button>
+      <button type="button" class="btn raised" id="fNone">None</button>
+      <span class="hint" id="fSum" style="margin-left:auto"></span></div>
+    <div class="group" style="max-height:55vh;overflow:auto"><table><thead><tr><th style="width:34px"></th><th>File</th><th style="text-align:right">Size</th><th style="text-align:right">Done</th></tr></thead><tbody id="fBody"></tbody></table></div>
+  </div>
+  <div class="foot"><button class="btn raised" value="cancel">Cancel</button>
+    <button class="btn suggested" id="fOk" value="ok">Download Selected</button></div>
+</form></dialog>
+
+<!-- Peers -->
+<dialog id="peersDlg" class="wide"><form class="dlg" method="dialog">
+  <h2 id="peersTitle">Peers</h2>
+  <div class="body"><div class="group" style="max-height:60vh;overflow:auto"><table>
+    <thead><tr><th></th><th>Address</th><th>Client</th><th>Has</th><th>↓ From</th><th>↑ To</th></tr></thead>
+    <tbody id="pBody"></tbody></table></div>
+    <div class="hint" id="pFoot"></div></div>
+  <div class="foot"><button class="btn raised" value="close">Close</button></div>
+</form></dialog>
+
+<!-- Settings -->
+<dialog id="setDlg"><form class="dlg" method="dialog">
+  <h2>Settings</h2>
+  <div class="body">
+    <div class="group">
+      <div class="field"><label>Download limit<small>KiB/s, 0 = unlimited</small></label><input type="number" min="0" step="64" id="oDown" style="width:110px"></div>
+      <div class="field"><label>Upload limit<small>KiB/s, 0 = unlimited</small></label><input type="number" min="0" step="64" id="oUp" style="width:110px"></div>
+      <div class="field"><label>Downloads at once</label><input type="number" min="1" max="50" id="oConc" style="width:110px"></div>
+      <div class="field"><label>Connections per server</label><input type="number" min="1" max="16" id="oConn" style="width:110px"></div>
+      <div class="field"><label>Seed ratio<small>0 = seed until the seed time ends</small></label><input type="number" min="0" step="0.1" id="oRatio" style="width:110px"></div>
+    </div>
+    <div class="group">
+      <div class="field"><label>Accent colour</label><select id="accentIn">
+        <option value="#c061cb,#9141ac">Purple</option><option value="#78aeed,#3584e4">Blue</option>
+        <option value="#5bc8af,#2190a4">Teal</option><option value="#8ff0a4,#3a944a">Green</option>
+        <option value="#f8e45c,#c88800">Yellow</option><option value="#ffa348,#ed5b00">Orange</option>
+        <option value="#ff7b63,#e62d42">Red</option><option value="#f9a8d4,#d56199">Pink</option>
+        <option value="#c0bfbc,#6f8396">Slate</option></select></div>
+      <div class="field"><label>Header banner</label><input type="checkbox" id="bannerIn" checked></div>
+    </div>
+    <div class="group">
+      <div class="field"><label>Country flags<small id="geoInfo"></small></label><button type="button" class="btn raised" id="geoBtn">Update</button></div>
+      <div class="field"><label for="geoAuto">Update automatically</label><input type="checkbox" id="geoAuto"></div>
+    </div>
+    <div class="group">
+      <div class="field"><label>Change password</label></div>
+      <div class="field"><input type="password" id="pwOld" placeholder="Current" autocomplete="current-password" style="flex:1">
+        <input type="password" id="pwNew" placeholder="New (8+)" autocomplete="new-password" style="flex:1">
+        <button type="button" class="btn raised" id="pwBtn">Save</button></div>
+    </div>
+    <div class="hint" id="aboutInfo"></div>
+  </div>
+  <div class="foot"><button class="btn raised" value="cancel">Close</button>
+    <button class="btn suggested" id="setOk" value="ok">Apply</button></div>
+</form></dialog>
+
+<!-- Confirm -->
+<dialog id="askDlg"><form class="dlg" method="dialog">
+  <h2 id="askTitle"></h2><div class="body"><div id="askText" class="dim" style="text-align:center"></div></div>
+  <div class="foot" style="justify-content:center"><button class="btn raised" value="no">Cancel</button>
+    <button class="btn destructive" value="yes" id="askYes">Remove</button></div>
+</form></dialog>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+};
+const ICONS = {
+  down: '<circle cx="12" cy="12" r="9"/><path d="M12 7v9M8.5 12.5 12 16l3.5-3.5"/>',
+  seed: '<path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
+  queue: '<path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9"/>',
+  paused: '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+  done: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>',
+  error: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>',
+  removed: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  pause: '<path d="M9 6v12M15 6v12"/>', play: '<path d="M8 5l11 7-11 7z"/>',
+  retry: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  peers: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.5 5.2"/>',
+  files: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  gauge: '<path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-5"/><circle cx="12" cy="13.5" r="1.3"/>',
+};
+const icon = (name, cls = "i") => `<svg class="${cls}" viewBox="0 0 24 24">${ICONS[name]}</svg>`;
+
+// ---------------------------------------------------------------- format
+const nf1 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+function fmtSize(n) {
+  n = Math.max(0, Number(n) || 0);
+  if (n < 1000) return `${n} bytes`;
+  const u = ["kB", "MB", "GB", "TB", "PB"]; let i = -1;
+  do { n /= 1000; i++; } while (n >= 1000 && i < u.length - 1);
+  return `${nf1.format(n)} ${u[i]}`;
+}
+function fmtBits(n) {
+  if (n < 1000) return `${n} bits`;
+  const u = ["kbit", "Mbit", "Gbit", "Tbit"]; let i = -1;
+  do { n /= 1000; i++; } while (n >= 1000 && i < u.length - 1);
+  return `${nf1.format(n)} ${u[i]}`;
+}
+function fixSpeed(n) { n = Number(n) || 0; return n < 0 ? n + 2 ** 32 : n; }   // aria2's 32-bit wrap
+function fmtSpeed(n) {
+  n = fixSpeed(n);
+  return n > 0 ? `${fmtSize(n)}/s (${fmtBits(n * 8)}/s)` : "0 bytes/s";
+}
+function fmtEta(s) {
+  if (!isFinite(s) || s < 0) return "";
+  s = Math.round(s);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  if (s < 86400 * 2) return `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h`;
+}
+const pct = f => `${Math.floor(f * 100)}%`;
+
+// ---------------------------------------------------------------- api
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: "POST", body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "X-Aria2gtk": "1" } };
+  const r = await fetch(path, { ...opt, credentials: "same-origin" });
+  let data = {};
+  try { data = await r.json(); } catch (_) {}
+  if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error("login required"); }
+  if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+const rpc = (method, ...params) => api("/api/rpc", { method, params }).then(d => d.result);
+function toast(msg, ms = 3500) {
+  const t = el("div", { class: "toast", text: msg });
+  $("#toasts").append(t); setTimeout(() => t.remove(), ms);
+}
+const fail = e => { if (e.message !== "login required") toast(e.message); };
+
+// ---------------------------------------------------------------- login
+let polling = null;
+function showLogin() {
+  $("#login").classList.remove("hidden"); $("#pw").focus();
+  clearTimeout(polling); polling = null;
+}
+$("#login form").addEventListener("submit", async ev => {
+  ev.preventDefault(); $("#loginErr").textContent = "";
+  try {
+    await api("/api/login", { password: $("#pw").value });
+    $("#pw").value = ""; $("#login").classList.add("hidden"); start();
+  } catch (e) { $("#loginErr").textContent = e.message; }
+});
+$("#logoutBtn").onclick = async () => { try { await api("/api/logout", {}); } catch (_) {} showLogin(); };
+
+// ---------------------------------------------------------------- state
+const S = { items: [], tab: "active", sel: null, rows: new Map(), limits: new Map(), seen: new Map(),
+            pendingFollow: new Set(), confirmed: new Set(), stat: {}, failedPolls: 0 };
+const PAGE = { active: "active", waiting: "queued", paused: "queued", complete: "done", error: "done", removed: "done" };
+document.querySelectorAll("#tabs .btn").forEach(b => b.onclick = () => {
+  S.tab = b.dataset.tab;
+  document.querySelectorAll("#tabs .btn").forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+
+async function poll() {
+  clearTimeout(polling);
+  try {
+    const st = await api("/api/state");
+    S.items = st.items; S.stat = st.stat; S.disk = st.disk; S.dir = st.dir; S.failedPolls = 0;
+    beat(); render(); banner.push(fixSpeed(st.stat.downloadSpeed), fixSpeed(st.stat.uploadSpeed));
+    checkFollowers();
+  } catch (e) {
+    if (e.message === "login required") return;
+    S.failedPolls++;
+    $("#sCount").textContent = S.failedPolls > 2 ? "Server not answering…" : $("#sCount").textContent;
+  }
+  polling = setTimeout(poll, document.hidden ? 4000 : 1000);
+}
+function beat() { const b = $("#beat"); b.classList.add("on"); setTimeout(() => b.classList.remove("on"), 120); }
+
+// ---------------------------------------------------------------- rows
+function activity(d, total, done, down) {
+  const now = Date.now(), seen = S.seen.get(d.gid) || { done: -1, since: now, moved: false };
+  if (down > 0) seen.moved = true;
+  if (done !== seen.done) { seen.done = done; seen.since = now; }
+  S.seen.set(d.gid, seen);
+  const waited = fmtEta((now - seen.since) / 1000) || "0s", conns = +d.connections || 0;
+  const verified = +d.verifiedLength || 0;
+  if (d.verifyIntegrityPending === "true") return ["Waiting to check existing files…", null];
+  if (total && verified > 0 && verified < total)
+    return [`Checking existing files… ${Math.floor(verified * 100 / total)}%`, verified / total];
+  if (d.metadata) return [`Getting torrent info from peers…  ·  ${conns} connected  ·  ${waited}`, null];
+  if (down > 0 || (total && done >= total)) return [null];
+  if (conns === 0) return [`${d.isBt ? "Looking for peers" : "Connecting"}…  ${waited}`, null];
+  if (!seen.moved) return [`Connected to ${conns} peer${conns !== 1 ? "s" : ""}, waiting for data…  ${waited}`, null];
+  if (now - seen.since >= 30000) return [`No data for ${waited}  ·  ${conns} peer${conns !== 1 ? "s" : ""}`, null];
+  return [null];
+}
+function limitNote(gid) {
+  const l = S.limits.get(gid); if (!l) return "";
+  const bits = [];
+  if (l.down) bits.push(`↓ ${fmtSize(l.down * 1024)}/s`);
+  if (l.up) bits.push(`↑ ${fmtSize(l.up * 1024)}/s`);
+  return bits.length ? "max " + bits.join(" ") : "";
+}
+function describe(d) {
+  const total = +d.totalLength || 0, done = +d.completedLength || 0;
+  const down = fixSpeed(d.downloadSpeed), up = fixSpeed(d.uploadSpeed);
+  const frac = total ? done / total : 0, st = d.status;
+  const sizes = total ? `${fmtSize(done)} of ${fmtSize(total)} (${pct(frac)})` : "";
+  let parts = [], ico = "down", busy = null, bar = frac, pulse = false;
+  if (st === "active" && d.seeding) {
+    ico = "seed"; parts = ["Seeding", fmtSize(total), `↑ ${fmtSpeed(up)}`];
+    if (+d.uploadLength) parts.push(`sent ${fmtSize(+d.uploadLength)}`);
+  } else if (st === "active") {
+    const [text, f] = activity(d, total, done, down);
+    if (text) {
+      busy = text; parts.push(text);
+      if (sizes && !text.startsWith("Checking")) parts.push(sizes);
+      if (up) parts.push(`↑ ${fmtSpeed(up)}`);
+      if (f != null) bar = f; else pulse = !done;
+    } else {
+      parts.push(sizes || (done ? fmtSize(done) : "Connecting…"), `↓ ${fmtSpeed(down)}`);
+      if (up) parts.push(`↑ ${fmtSpeed(up)}`);
+      if (down && total) parts.push(`${fmtEta((total - done) / down)} left`);
+      if (d.isBt && +d.numSeeders) parts.push(`${d.numSeeders} seeds`);
+    }
+  } else if (st === "waiting") { ico = "queue"; parts = ["Queued", sizes]; }
+  else if (st === "paused") { ico = "paused"; parts = ["Paused", sizes]; }
+  else if (st === "complete") { ico = "done"; parts = ["Completed", fmtSize(total)]; }
+  else if (st === "error") { ico = "error"; parts = [`Failed: ${d.errorMessage || "error " + d.errorCode}`]; }
+  else if (st === "removed") { ico = "removed"; parts = ["Removed"]; }
+  if (["active", "waiting", "paused"].includes(st)) { const n = limitNote(d.gid); if (n) parts.push(n); }
+  return { text: parts.filter(Boolean).join("  ·  "), ico, busy, bar, pulse,
+           showBar: ["active", "waiting", "paused"].includes(st) };
+}
+function needsFiles(d) {
+  return d.status === "paused" && d.following && !S.confirmed.has(d.gid);
+}
+function makeRow(gid) {
+  const r = { gid };
+  r.el = el("div", { class: "row" });
+  r.ico = el("div", { class: "ico" });
+  r.name = el("div", { class: "name" }); r.sub = el("div", { class: "sub num" });
+  r.chip = el("button", { class: "chip hidden", type: "button", text: "Choose files", onclick: () => openFiles(gid, true) });
+  const mk = (ic, tip, fn, cls = "") => {
+    const b = el("button", { class: `btn circle ${cls}`, title: tip, type: "button" });
+    b.innerHTML = icon(ic); b.onclick = ev => { ev.stopPropagation(); fn(ev); }; return b;
+  };
+  r.toggle = mk("pause", "Pause", () => toggle(gid));
+  r.files = mk("files", "Files", () => openFiles(gid, false), "opt");
+  r.peers = mk("peers", "Peers", () => openPeers(gid), "opt");
+  r.limit = mk("gauge", "Speed limits", ev => openLimits(gid, ev.clientX, ev.clientY), "opt");
+  r.trash = mk("trash", "Remove", () => removeItem(gid));
+  r.bar = el("div", { class: "bar" }, el("i"));
+  r.el.append(el("div", { class: "top" }, r.ico, el("div", { class: "txt" }, r.name, r.sub), r.chip,
+                 el("div", { class: "acts" }, r.toggle, r.files, r.peers, r.limit, r.trash)), r.bar);
+  r.el.onclick = () => { S.sel = gid; document.querySelectorAll(".row.sel").forEach(x => x.classList.remove("sel")); r.el.classList.add("sel"); };
+  r.el.oncontextmenu = ev => { ev.preventDefault(); openLimits(gid, ev.clientX, ev.clientY); };
+  S.rows.set(gid, r);
+  readLimits(gid);
+  return r;
+}
+function updateRow(r, d) {
+  const v = describe(d);
+  r.d = d;
+  r.name.textContent = d.name; r.name.title = d.path || d.name;
+  r.sub.textContent = v.text; r.sub.title = v.text;
+  const icoKey = v.busy ? "busy" : v.ico;
+  if (r.icoKey !== icoKey) {
+    r.icoKey = icoKey;
+    r.ico.innerHTML = v.busy ? '<div class="spin"></div>' : icon(v.ico);
+  }
+  r.el.classList.toggle("err", d.status === "error");
+  r.el.classList.toggle("sel", S.sel === d.gid);
+  r.bar.classList.toggle("hidden", !v.showBar);
+  r.bar.classList.toggle("pulse", v.pulse);
+  r.bar.firstChild.style.width = `${(v.bar * 100).toFixed(2)}%`;
+  const st = d.status, running = st === "active" || st === "waiting";
+  const canRetry = (st === "error" || st === "removed") && !d.isBt && d.uris && d.uris.length;
+  r.toggle.classList.toggle("hidden", !(running || st === "paused" || canRetry));
+  r.toggle.innerHTML = icon(running ? "pause" : st === "paused" ? "play" : "retry");
+  r.toggle.title = running ? "Pause" : st === "paused" ? "Resume" : "Retry";
+  r.files.classList.toggle("hidden", !(d.isBt && d.nfiles > 0 && !d.metadata));
+  r.peers.classList.toggle("hidden", !(d.isBt && st === "active"));
+  r.limit.classList.toggle("hidden", !["active", "waiting", "paused"].includes(st));
+  r.chip.classList.toggle("hidden", !needsFiles(d));
+}
+function render() {
+  const groups = { active: [], queued: [], done: [] };
+  for (const d of S.items) groups[PAGE[d.status] || "done"].push(d);
+  document.querySelectorAll("#tabs .btn").forEach(b => {
+    const n = groups[b.dataset.tab].length, badge = b.querySelector(".badge");
+    badge.textContent = n; badge.classList.toggle("hidden", !n || b.dataset.tab === "done");
+  });
+  const list = $("#list"), show = groups[S.tab], keep = new Set();
+  show.forEach((d, i) => {
+    const r = S.rows.get(d.gid) || makeRow(d.gid);
+    updateRow(r, d); keep.add(d.gid);
+    if (list.children[i] !== r.el) list.insertBefore(r.el, list.children[i] || null);
+  });
+  [...list.children].forEach(c => { if (![...keep].some(g => S.rows.get(g).el === c)) c.remove(); });
+  const all = new Set(S.items.map(d => d.gid));
+  for (const g of [...S.rows.keys()]) if (!all.has(g)) { S.rows.delete(g); S.limits.delete(g); }
+  list.classList.toggle("hidden", !show.length);
+  $("#empty").classList.toggle("hidden", !!show.length);
+  const texts = { active: ["No active downloads", "Add a link, a magnet or a .torrent file with Add."],
+                  queued: ["Nothing queued", "Paused and waiting downloads appear here."],
+                  done: ["Nothing finished yet", "Completed and failed downloads appear here."] };
+  $("#emptyTitle").textContent = texts[S.tab][0]; $("#emptyText").textContent = texts[S.tab][1];
+  // status bar
+  $("#sDown").textContent = `↓ ${fmtSpeed(S.stat.downloadSpeed)}`;
+  $("#sUp").textContent = `↑ ${fmtSpeed(S.stat.uploadSpeed)}`;
+  const seeding = S.items.filter(d => d.status === "active" && d.seeding).length;
+  const act = groups.active.length - seeding;
+  $("#sCount").textContent = `${act} active${seeding ? ` · ${seeding} seeding` : ""}${groups.queued.length ? ` · ${groups.queued.length} queued` : ""}`;
+  $("#sDisk").textContent = S.disk && S.disk.free != null ? `${fmtSize(S.disk.free)} free` : "";
+  $("#sDisk").title = S.dir || "";
+  banner.counts(act, seeding);
+}
+
+// ---------------------------------------------------------------- actions
+async function toggle(gid) {
+  const d = S.rows.get(gid)?.d; if (!d) return;
+  try {
+    if (d.status === "active" || d.status === "waiting") await rpc("aria2.pause", gid);
+    else if (d.status === "paused") { S.confirmed.add(gid); await rpc("aria2.unpause", gid); }
+    else { await rpc("aria2.addUri", d.uris, { dir: d.dir }); await rpc("aria2.removeDownloadResult", gid); }
+    poll();
+  } catch (e) { fail(e); }
+}
+function ask(title, text, yes = "Remove") {
+  return new Promise(res => {
+    $("#askTitle").textContent = title; $("#askText").textContent = text; $("#askYes").textContent = yes;
+    const dlg = $("#askDlg"); dlg.returnValue = "";
+    dlg.onclose = () => res(dlg.returnValue === "yes"); dlg.showModal();
+  });
+}
+async function removeItem(gid) {
+  const d = S.rows.get(gid)?.d; if (!d) return;
+  try {
+    if (["active", "waiting", "paused"].includes(d.status)) {
+      if (!await ask(`Remove “${d.name}”?`, "The download stops. Files already downloaded stay on the server.")) return;
+      await rpc("aria2.forceRemove", gid);
+      setTimeout(() => rpc("aria2.removeDownloadResult", gid).catch(() => {}).then(poll), 800);
+    } else await rpc("aria2.removeDownloadResult", gid);
+    poll();
+  } catch (e) { fail(e); }
+}
+let allPaused = false;
+$("#pauseAllBtn").onclick = async () => {
+  try {
+    const running = S.items.some(d => d.status === "active" || d.status === "waiting");
+    await rpc(running ? "aria2.pauseAll" : "aria2.unpauseAll");
+    toast(running ? "Everything paused" : "Everything resumed"); poll();
+  } catch (e) { fail(e); }
+};
+
+// ---------------------------------------------------------------- speed limits
+const STEPS = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 0];
+const stepOf = kib => !kib ? STEPS.length - 1 :
+  STEPS.slice(0, -1).reduce((b, v, i) => Math.abs(Math.log(v) - Math.log(kib)) < Math.abs(Math.log(STEPS[b]) - Math.log(kib)) ? i : b, 0);
+const limitText = kib => kib ? fmtSpeed(kib * 1024) : "Unlimited";
+async function readLimits(gid) {
+  try {
+    const o = await rpc("aria2.getOption", gid);
+    const kib = v => Math.floor((+v || 0) / 1024);
+    S.limits.set(gid, { down: kib(o["max-download-limit"]), up: kib(o["max-upload-limit"]) });
+  } catch (_) {}
+}
+let pop = null;
+function closePop() { if (pop) { pop.remove(); pop = null; } }
+document.addEventListener("pointerdown", ev => { if (pop && !pop.contains(ev.target)) closePop(); });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") closePop(); });
+function openLimits(gid, x, y) {
+  const d = S.rows.get(gid)?.d; if (!d || !["active", "waiting", "paused"].includes(d.status)) return;
+  closePop();
+  const total = +d.totalLength || 0, done = +d.completedLength || 0;
+  const finished = total && done >= total;
+  const kinds = finished ? ["up"] : d.isBt ? ["down", "up"] : ["down"];
+  const lim = { ...(S.limits.get(gid) || { down: 0, up: 0 }) };
+  pop = el("div", { class: "pop" }, el("b", { text: "Speed Limits" }),
+           el("div", { class: "hint", text: d.name, style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }));
+  let timer = 0;
+  const send = () => {
+    S.limits.set(gid, { ...lim });
+    rpc("aria2.changeOption", gid, {
+      "max-download-limit": lim.down ? `${lim.down}K` : "0",
+      "max-upload-limit": lim.up ? `${lim.up}K` : "0" }).catch(fail);
+    render();
+  };
+  const ranges = [];
+  for (const k of kinds) {
+    const val = el("span", { class: "num dim" });
+    const r = el("input", { type: "range", min: 0, max: STEPS.length - 1, step: 1 });
+    r.value = stepOf(lim[k]); val.textContent = limitText(lim[k]);
+    r.oninput = () => { lim[k] = STEPS[+r.value]; val.textContent = limitText(lim[k]);
+                        clearTimeout(timer); timer = setTimeout(send, 250); };
+    ranges.push(r);
+    pop.append(el("div", { class: "lab" }, el("span", { text: k === "up" ? "Upload" : "Download" }), val), r,
+               el("div", { class: "ticks" }, ...["16 kB/s", "1 MB/s", "16 MB/s", "∞"].map(t => el("span", { text: t }))));
+  }
+  pop.append(el("button", { class: "btn", type: "button", text: "No Limits", style: "align-self:flex-end",
+    onclick: () => { ranges.forEach(r => { r.value = STEPS.length - 1; r.oninput(); }); } }));
+  document.body.append(pop);
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = `${Math.max(8, Math.min(x - w / 2, innerWidth - w - 8))}px`;
+  pop.style.top = `${y + h + 16 > innerHeight ? Math.max(8, y - h - 10) : y + 10}px`;
+}
+
+// ---------------------------------------------------------------- files
+let filesGid = null, filesStart = false;
+async function openFiles(gid, start) {
+  try {
+    const { files } = await api(`/api/files?gid=${encodeURIComponent(gid)}`);
+    filesGid = gid; filesStart = start || needsFiles(S.rows.get(gid)?.d || {});
+    const d = S.rows.get(gid)?.d;
+    $("#filesTitle").textContent = d ? d.name : "Choose Files";
+    const body = $("#fBody"); body.replaceChildren();
+    const base = d?.dir ? d.dir.replace(/\/$/, "") + "/" : "";
+    for (const f of files) {
+      const len = +f.length || 0, got = +f.completedLength || 0;
+      const cb = el("input", { type: "checkbox", "data-i": f.index }); cb.checked = f.selected === "true";
+      cb.onchange = sumFiles;
+      const path = (f.path || "").startsWith(base) ? f.path.slice(base.length) : (f.path || f.uris?.[0]?.uri || "");
+      body.append(el("tr", {}, el("td", {}, cb), el("td", { text: path, style: "word-break:break-all" }),
+        el("td", { class: "num", text: fmtSize(len), style: "text-align:right;white-space:nowrap" }),
+        el("td", { class: "num dim", text: len ? pct(got / len) : "", style: "text-align:right" })));
+    }
+    $("#fOk").textContent = filesStart ? "Download Selected" : "Apply";
+    sumFiles(); $("#filesDlg").showModal();
+  } catch (e) { fail(e); }
+}
+function sumFiles() {
+  const rows = [...$("#fBody").querySelectorAll("tr")];
+  let n = 0, size = 0;
+  rows.forEach(tr => { if (tr.querySelector("input").checked) { n++; size += parseSize(tr.children[2].textContent); } });
+  $("#fSum").textContent = `${n} of ${rows.length} files · ${fmtSize(size)}`;
+  $("#fOk").disabled = !n;
+}
+function parseSize(t) {   // only for the summary; reads back what fmtSize wrote
+  const m = t.match(/([\d.,]+)\s*(bytes|kB|MB|GB|TB|PB)/); if (!m) return 0;
+  const mult = { bytes: 1, kB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12, PB: 1e15 }[m[2]];
+  return parseFloat(m[1].replace(/[^\d,.]/g, "").replace(",", ".")) * mult;
+}
+$("#fAll").onclick = () => { $("#fBody").querySelectorAll("input").forEach(c => c.checked = true); sumFiles(); };
+$("#fNone").onclick = () => { $("#fBody").querySelectorAll("input").forEach(c => c.checked = false); sumFiles(); };
+$("#filesDlg").addEventListener("close", async () => {
+  if ($("#filesDlg").returnValue !== "ok" || !filesGid) return;
+  const sel = [...$("#fBody").querySelectorAll("input")].filter(c => c.checked).map(c => c.dataset.i);
+  try {
+    await rpc("aria2.changeOption", filesGid, { "select-file": sel.join(",") });
+    if (filesStart) { S.confirmed.add(filesGid); await rpc("aria2.unpause", filesGid); }
+    toast(filesStart ? "Download started" : "File choice saved"); poll();
+  } catch (e) { fail(e); }
+});
+function checkFollowers() {
+  for (const d of S.items) {
+    if (d.following && S.pendingFollow.has(d.following) && d.status === "paused" && !$("#filesDlg").open) {
+      S.pendingFollow.delete(d.following); openFiles(d.gid, true); break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- peers
+let peersTimer = 0, peersGid = null;
+async function loadPeers() {
+  if (!peersGid || !$("#peersDlg").open) return;
+  try {
+    const p = await api(`/api/peers?gid=${encodeURIComponent(peersGid)}`);
+    const body = $("#pBody"); body.replaceChildren();
+    if (!p.peers.length) body.append(el("tr", {}, el("td", { colspan: 6, class: "dim", style: "text-align:center;padding:26px" },
+      el("div", { class: "spin", style: "margin:0 auto 10px" }), "Looking for peers…")));
+    p.peers.sort((a, b) => (b.down + b.up) - (a.down + a.up));
+    for (const x of p.peers) {
+      const host = x.ip.includes(":") ? `[${x.ip}]` : x.ip;
+      const addr = x.port === "0" || !x.port ? `${host} (incoming)` : `${host}:${x.port}`;
+      const sp = v => v > 0 ? el("div", { class: "two num" }, el("span", { text: `${fmtSize(v)}/s` }),
+                                  el("small", { text: `${fmtBits(v * 8)}/s` })) : el("span", { class: "dim", text: "–" });
+      const bar = el("div", { class: "bar mini" }, el("i", { style: `width:${(x.progress * 100).toFixed(1)}%` }));
+      body.append(el("tr", { title: `${x.choked ? "it chokes you" : "it sends to you"}, ${x.choking ? "you choke it" : "you send to it"}` },
+        el("td", {}, el("span", { class: "flag", title: x.country || "Unknown or private address", text: x.flag || "" }),
+                     x.seeder ? el("span", { title: "Seeder (has everything)", text: " ★" }) : null),
+        el("td", { class: "num", text: addr }), el("td", { text: x.client }),
+        el("td", {}, el("div", { class: "two" }, el("small", { text: pct(x.progress) }), bar)),
+        el("td", {}, sp(x.down)), el("td", {}, sp(x.up))));
+    }
+    $("#pFoot").textContent = p.geo ? `${p.peers.length} peers · ${p.credit}` : `${p.peers.length} peers · country flags appear once the server has downloaded its country database`;
+  } catch (e) { $("#pFoot").textContent = e.message; }
+  peersTimer = setTimeout(loadPeers, 2000);
+}
+function openPeers(gid) {
+  peersGid = gid; $("#peersTitle").textContent = `Peers · ${S.rows.get(gid)?.d?.name || ""}`;
+  $("#pBody").replaceChildren(); $("#pFoot").textContent = "";
+  $("#peersDlg").showModal(); clearTimeout(peersTimer); loadPeers();
+}
+$("#peersDlg").addEventListener("close", () => { clearTimeout(peersTimer); peersGid = null; });
+
+// ---------------------------------------------------------------- add
+let addFiles = [];
+$("#addBtn").onclick = openAdd;
+async function openAdd(prefill) {
+  $("#links").value = typeof prefill === "string" ? prefill : "";
+  addFiles = []; showAddFiles();
+  $("#addDlg").showModal(); $("#links").focus();
+  try {
+    const r = await api(`/api/dirs?path=${encodeURIComponent($("#dirIn").value)}`);
+    $("#dirBase").textContent = `Inside ${r.base}`;
+    $("#dirList").replaceChildren(...r.dirs.map(n => el("option", { value: (r.path ? r.path + "/" : "") + n })));
+  } catch (_) {}
+}
+$("#dirIn").addEventListener("input", async () => {
+  const v = $("#dirIn").value, parent = v.includes("/") ? v.slice(0, v.lastIndexOf("/")) : "";
+  try {
+    const r = await api(`/api/dirs?path=${encodeURIComponent(parent)}`);
+    $("#dirList").replaceChildren(...r.dirs.map(n => el("option", { value: (r.path ? r.path + "/" : "") + n })));
+  } catch (_) {}
+});
+function showAddFiles() {
+  $("#fileList").textContent = addFiles.length ? "Files: " + addFiles.map(f => f.name).join(", ") : "";
+}
+async function takeFiles(list) {
+  for (const f of list) {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    addFiles.push({ name: f.name, data: btoa(bin) });
+  }
+  showAddFiles();
+}
+const drop = $("#drop");
+drop.onclick = () => $("#fileIn").click();
+$("#fileIn").onchange = ev => takeFiles(ev.target.files);
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", ev => takeFiles(ev.dataTransfer.files));
+document.addEventListener("dragover", ev => ev.preventDefault());
+document.addEventListener("drop", ev => {           // dropping anywhere opens Add
+  ev.preventDefault();
+  if ($("#addDlg").open) return;
+  const text = ev.dataTransfer.getData("text/uri-list") || ev.dataTransfer.getData("text/plain");
+  openAdd(text || ""); if (ev.dataTransfer.files.length) takeFiles(ev.dataTransfer.files);
+});
+document.addEventListener("paste", ev => {           // pasting a link anywhere opens Add
+  if (document.querySelector("dialog[open]") || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
+  const t = ev.clipboardData.getData("text"); if (/^(https?|ftp|sftp|magnet):/i.test(t.trim())) openAdd(t.trim());
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key.toLowerCase() === "n" && !document.querySelector("dialog[open]") && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName)) { ev.preventDefault(); openAdd(); }
+});
+$("#addDlg").addEventListener("close", async () => {
+  if ($("#addDlg").returnValue !== "go") return;
+  const links = $("#links").value.trim();
+  if (!links && !addFiles.length) return;
+  try {
+    const r = await api("/api/add", { links, files: addFiles, dir: $("#dirIn").value.trim(), choose: $("#chooseIn").checked });
+    r.errors.forEach(e => toast(e, 6000));
+    if (r.added.length) toast(`Added ${r.added.length} download${r.added.length > 1 ? "s" : ""}`);
+    for (const a of r.added) {
+      if (a.choose) setTimeout(() => openFiles(a.gid, true), 400);
+      else if ($("#chooseIn").checked) S.pendingFollow.add(a.gid);
+    }
+    localStorage.setItem("a2g-choose", $("#chooseIn").checked ? "1" : "");
+    localStorage.setItem("a2g-dir", $("#dirIn").value.trim());
+    poll();
+  } catch (e) { fail(e); }
+});
+$("#chooseIn").checked = !!localStorage.getItem("a2g-choose");
+$("#dirIn").value = localStorage.getItem("a2g-dir") || "";
+
+// ---------------------------------------------------------------- settings
+function applyLook() {
+  const [a, bg] = (localStorage.getItem("a2g-accent") || "#c061cb,#9141ac").split(",");
+  document.documentElement.style.setProperty("--accent", a);
+  document.documentElement.style.setProperty("--accent-bg", bg);
+  $(".banner-wrap").classList.toggle("hidden", localStorage.getItem("a2g-banner") === "0");
+}
+applyLook();
+$("#settingsBtn").onclick = async () => {
+  try {
+    const s = await api("/api/settings"), o = s.options, kib = v => Math.floor((+v || 0) / 1024);
+    $("#oDown").value = kib(o["max-overall-download-limit"]); $("#oUp").value = kib(o["max-overall-upload-limit"]);
+    $("#oConc").value = o["max-concurrent-downloads"]; $("#oConn").value = o["max-connection-per-server"];
+    $("#oRatio").value = o["seed-ratio"];
+    $("#accentIn").value = localStorage.getItem("a2g-accent") || "#c061cb,#9141ac";
+    $("#bannerIn").checked = localStorage.getItem("a2g-banner") !== "0";
+    $("#geoInfo").textContent = s.geo.file ? `${s.geo.file} · edition ${s.geo.edition}` : "Not downloaded yet";
+    $("#geoAuto").checked = s.geo.auto;
+    $("#aboutInfo").textContent = `aria2 ${s.version} · aria2gtk-server ${s.server} · downloads in ${s.dir} · log ${s.log}`;
+    $("#setDlg").showModal();
+  } catch (e) { fail(e); }
+};
+$("#geoBtn").onclick = async () => {
+  $("#geoBtn").disabled = true; $("#geoBtn").textContent = "Checking…";
+  try { toast(`Country database: ${(await api("/api/geo", {})).message}`, 5000); } catch (e) { fail(e); }
+  $("#geoBtn").disabled = false; $("#geoBtn").textContent = "Update";
+};
+$("#pwBtn").onclick = async () => {
+  try { await api("/api/password", { old: $("#pwOld").value, new: $("#pwNew").value });
+        $("#pwOld").value = $("#pwNew").value = ""; toast("Password changed. Other browsers are signed out."); }
+  catch (e) { fail(e); }
+};
+$("#setDlg").addEventListener("close", async () => {
+  if ($("#setDlg").returnValue !== "ok") return;
+  localStorage.setItem("a2g-accent", $("#accentIn").value);
+  localStorage.setItem("a2g-banner", $("#bannerIn").checked ? "1" : "0");
+  applyLook();
+  const k = id => `${Math.max(0, Math.floor(+$(id).value || 0))}K`;
+  try {
+    await rpc("aria2.changeGlobalOption", {
+      "max-overall-download-limit": k("#oDown"), "max-overall-upload-limit": k("#oUp"),
+      "max-concurrent-downloads": String(Math.max(1, +$("#oConc").value || 5)),
+      "max-connection-per-server": String(Math.min(16, Math.max(1, +$("#oConn").value || 8))),
+      "seed-ratio": String(Math.max(0, +$("#oRatio").value || 0)) });
+    await api("/api/settings", { geo_auto: $("#geoAuto").checked });
+    toast("Settings saved");
+  } catch (e) { fail(e); }
+});
+
+// ---------------------------------------------------------------- banner
+const banner = (() => {
+  const cv = $("#banner"), ctx = cv.getContext("2d"), H = 92;
+  const st = { down: 0, up: 0, hist: Array(90).fill(0), uhist: Array(90).fill(0), active: 0, seeding: 0 };
+  let t = 0, last = 0, rnd = 7;
+  const rand = () => (rnd = (rnd * 16807) % 2147483647) / 2147483647;
+  const parts = Array.from({ length: 36 }, (_, k) => ({ k, x: rand(), wave: Math.floor(rand() * 3), dy: rand() * 6 - 3,
+    size: 1.2 + rand() * 1.2, speed: 0.04 + rand() * 0.06, phase: rand() * 6.3, dir: k % 4 ? 1 : -1 }));
+  const energy = () => Math.max(0, Math.min(1, Math.log10(1 + (st.down + st.up) / 1024) / 5));
+  const waveY = (x, h, i, e) => { const amp = (7 + 4 * i) * (0.55 + 0.75 * e), base = h * 0.64 + i * 7;
+    return base + amp * Math.sin(x / (170 + 55 * i) * 2 * Math.PI + t * (1 + 0.35 * i)) + amp * 0.35 * Math.sin(x / (61 + 13 * i) + t * 1.7); };
+  const rgb = hex => { const n = parseInt(hex.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+  function draw() {
+    const w = cv.clientWidth, dpr = devicePixelRatio || 1;
+    if (!w) return;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(H * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, H);
+    const css = getComputedStyle(document.documentElement);
+    const acc = rgb(css.getPropertyValue("--accent").trim() || "#c061cb");
+    const fgs = css.getPropertyValue("--fg").trim(), fg = fgs.startsWith("#") ? rgb(fgs) : matchMedia("(prefers-color-scheme: light)").matches ? [20, 20, 26] : [255, 255, 255];
+    const e = energy(), h = H;
+    let g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, rgba(acc, .30)); g.addColorStop(.55, rgba(acc, .10)); g.addColorStop(1, rgba(acc, .16));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    // graph
+    const gx0 = Math.max(w - 320, w * 0.55), gx1 = w - 12, top = Math.max(1, ...st.hist, ...st.uhist);
+    const step = (gx1 - gx0) / (st.hist.length - 1), Y = v => h - 6 - h * 0.46 * (v / top);
+    const upCol = acc.map(c => Math.min(255, c * .35 + 255 * .65));
+    let peak = null;
+    if (st.hist.some(Boolean)) {
+      ctx.beginPath(); ctx.moveTo(gx0, h); st.hist.forEach((v, i) => ctx.lineTo(gx0 + i * step, Y(v))); ctx.lineTo(gx1, h); ctx.closePath();
+      g = ctx.createLinearGradient(0, h * .45, 0, h); g.addColorStop(0, rgba(acc, .32)); g.addColorStop(1, rgba(acc, 0));
+      ctx.fillStyle = g; ctx.fill();
+      ctx.beginPath(); st.hist.forEach((v, i) => ctx[i ? "lineTo" : "moveTo"](gx0 + i * step, Y(v)));
+      ctx.strokeStyle = rgba(acc, .85); ctx.lineWidth = 1.4; ctx.stroke();
+      let im = 0; st.hist.forEach((v, i) => { if (v >= st.hist[im]) im = i; });
+      peak = [gx0 + im * step, Y(st.hist[im]), st.hist[im]];
+    }
+    if (st.uhist.some(Boolean)) {
+      ctx.beginPath(); st.uhist.forEach((v, i) => ctx[i ? "lineTo" : "moveTo"](gx0 + i * step, Y(v)));
+      ctx.setLineDash([4, 3]); ctx.strokeStyle = rgba(upCol, .75); ctx.lineWidth = 1.1; ctx.stroke(); ctx.setLineDash([]);
+    }
+    // waves + particles, faded behind the texts
+    ctx.save();
+    const textEnd = Math.min(48 + 25 + 20 + 290, w * .5);
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.moveTo(0, waveY(0, h, i, e));
+      for (let x = 6; x <= w + 6; x += 6) ctx.lineTo(x, waveY(x, h, i, e));
+      for (const [lw, a] of [[7, .07], [3.5, .12], [1.5, .55 - .14 * i]]) {
+        const m = ctx.createLinearGradient(0, 0, w, 0);
+        m.addColorStop(0, rgba(acc, a * .55)); m.addColorStop(Math.min(.98, textEnd / w), rgba(acc, a * .3));
+        m.addColorStop(Math.min(.99, (textEnd + 120) / w), rgba(acc, a)); m.addColorStop(Math.max(0, (w - 260) / w), rgba(acc, a));
+        m.addColorStop(1, rgba(acc, a * .35));
+        ctx.strokeStyle = m; ctx.lineWidth = lw; ctx.stroke();
+      }
+    }
+    const vis = Math.floor(6 + 30 * e);
+    for (const p of parts) {
+      if (p.k >= vis) continue;
+      const x = p.x * w, y = waveY(x, h, p.wave, e) + p.dy, glow = .45 + .55 * (.5 + .5 * Math.sin(t * 3 + p.phase));
+      const col = p.dir > 0 ? acc : upCol, r = p.size;
+      const fade = x < textEnd ? .35 : 1;
+      const rg = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+      rg.addColorStop(0, rgba(col, .55 * glow * fade)); rg.addColorStop(1, rgba(col, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(x, y, r * 4, 0, 7); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${.85 * glow * fade})`; ctx.beginPath(); ctx.arc(x, y, r * .8, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    // emblem
+    const cx = 48, cy = h / 2, rad = 25, pulse = .5 + .5 * Math.sin(t * 1.6);
+    let rg = ctx.createRadialGradient(cx, cy, rad * .6, cx, cy, rad * 2.6);
+    rg.addColorStop(0, rgba(acc, .45 + .2 * pulse * e)); rg.addColorStop(1, rgba(acc, 0));
+    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(cx, cy, rad * 2.6, 0, 7); ctx.fill();
+    rg = ctx.createRadialGradient(cx - 8, cy - 10, 2, cx, cy, rad);
+    rg.addColorStop(0, `rgb(${acc.map(c => Math.min(255, c + 90))})`); rg.addColorStop(1, `rgb(${acc.map(c => c * .75)})`);
+    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(cx, cy, rad - .6, 0, 7); ctx.stroke();
+    const bob = 2.2 * Math.sin(t * 2.2) * (.3 + e);
+    ctx.strokeStyle = "rgba(255,255,255,.97)"; ctx.lineWidth = 3.2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(cx, cy - 12 + bob); ctx.lineTo(cx, cy + 5 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - 8, cy - 2 + bob); ctx.lineTo(cx, cy + 6 + bob); ctx.lineTo(cx + 8, cy - 2 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - 11, cy + 12); ctx.lineTo(cx + 11, cy + 12); ctx.stroke();
+    // titles
+    const font = getComputedStyle(document.body).fontFamily, tx = cx + rad + 20;
+    ctx.textBaseline = "top";
+    ctx.fillStyle = rgba(fg, .96); ctx.font = `700 22px ${font}`; ctx.fillText("Aria2 GTK", tx, h / 2 - 30);
+    ctx.fillStyle = rgba(fg, .62); ctx.font = `12.5px ${font}`; ctx.fillText("web  ·  downloads  ·  torrents", tx, h / 2 - 2);
+    ctx.fillStyle = rgba(acc.map((c, i) => c * .5 + fg[i] * .5), .9); ctx.font = `700 11px ${font}`;
+    ctx.fillText(`${st.active} downloading  ·  ${st.seeding} seeding`, tx, h / 2 + 15);
+    // peak dot under the speeds
+    if (peak && peak[2] > 0) {
+      const [px, py] = peak, pp = .5 + .5 * Math.sin(t * 2.4);
+      rg = ctx.createRadialGradient(px, py, 0, px, py, 9); rg.addColorStop(0, rgba(acc, .55 + .25 * pp)); rg.addColorStop(1, rgba(acc, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(px, py, 9, 0, 7); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.95)"; ctx.beginPath(); ctx.arc(px, py, 2.4, 0, 7); ctx.fill();
+    }
+    // speeds, right aligned
+    const boxes = [];
+    for (const [text, f, y, a, col] of [[`↓ ${fmtSpeed(st.down)}`, `700 20px ${font}`, h / 2 - 26, .97, fg],
+                                         [`↑ ${fmtSpeed(st.up)}`, `14px ${font}`, h / 2 + 4, .75, st.up ? upCol : fg]]) {
+      ctx.font = f; const tw = ctx.measureText(text).width;
+      if (w - 24 - tw < tx + 200) continue;                 // narrow screens: no room
+      ctx.fillStyle = rgba(col, a); ctx.fillText(text, w - 24 - tw, y);
+      boxes.push([w - 30 - tw, y - 2, w, y + 24]);
+    }
+    if (peak && peak[2] > 0) {
+      const label = `peak ${fmtSize(peak[2])}/s`; ctx.font = `700 10px ${font}`;
+      const lw = ctx.measureText(label).width, lh = 12, [px, py] = peak;
+      const free = (x, y) => x >= gx0 - 40 && x + lw <= w - 4 && y >= 2 && y + lh <= h - 2 &&
+        !boxes.some(([a, b, c, d]) => x < c && x + lw > a && y < d && y + lh > b);
+      const spot = [[px + 7, py - lh - 3], [px - lw - 7, py - lh - 3], [px + 7, py + 3], [px - lw - 7, py + 3], [gx0 + 4, h - lh - 4]].find(s => free(...s));
+      if (spot) { ctx.fillStyle = rgba(fg, .8); ctx.fillText(label, ...spot); }
+    }
+  }
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden || $(".banner-wrap").classList.contains("hidden")) return;
+    const dt = Math.min(.1, (now - (last || now)) / 1000);
+    if (dt < 1 / 30 && last) return;
+    last = now;
+    const e = energy(), still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!still) { t += dt * (.5 + 2.2 * e); for (const p of parts) p.x = ((p.x + p.dir * p.speed * dt * (.4 + 1.6 * e)) % 1 + 1) % 1; }
+    draw();
+  }
+  requestAnimationFrame(frame);
+  return {
+    push(d, u) { st.down = d; st.up = u; st.hist.push(d); st.hist.shift(); st.uhist.push(u); st.uhist.shift(); },
+    counts(a, s) { st.active = a; st.seeding = s; },
+  };
+})();
+
+// ---------------------------------------------------------------- start
+async function start() {
+  try { await api("/api/me"); $("#login").classList.add("hidden"); poll(); }
+  catch (_) { /* showLogin() already ran */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && $("#login").classList.contains("hidden")) poll();
+});
+start();
+</script>
+</body>
+</html>

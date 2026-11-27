@@ -40,6 +40,52 @@ To open `.torrent` files and magnet links with it, copy `io.github.aria2gtk.desk
 update-desktop-database ~/.local/share/applications
 ```
 
+## Web UI for a home server (Proxmox, NAS, …)
+
+`aria2gtk-server.py` runs aria2 on a server without a desktop, with a web page to watch and
+control it from any browser on your network: PC, phone or tablet. It needs only `aria2` and
+`python3` (no GTK), so a small Debian LXC is enough.
+
+![The web UI in a browser](screenshots/web.jpg)
+
+The page has the same banner, tabs and rows as the desktop app. It can:
+- add links, magnets, `.torrent` and `.metalink` files, by pasting, drag-and-drop or file picker;
+- choose which files of a torrent to download;
+- set speed limits per download (right-click, or long-press on a phone);
+- show peers with country flags, and the free space on the server.
+
+**Security:**
+- **Password sign-in:** passwords are stored as a PBKDF2 hash, and sign-ins last 30 days.
+- **aria2 stays private:** it listens on localhost only, and the page never sees its secret.
+- **Limited access:** only download actions are allowed, and folders must be inside the
+  download folder.
+- **Encryption:** plain http is fine on a home network. Use `--cert`/`--key` (or a reverse
+  proxy) if it's reachable from the internet.
+
+### Quick start in a Proxmox LXC (Debian 12/13 template)
+
+```bash
+apt install aria2 python3 git
+git clone https://github.com/iceM0nger/aria2-gtkGUI /opt/aria2gtk
+useradd --system --home-dir /var/lib/aria2gtk-server --shell /usr/sbin/nologin aria2
+mkdir -p /srv/downloads && chown aria2:aria2 /srv/downloads
+cp /opt/aria2gtk/aria2gtk-server.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now aria2gtk-server
+journalctl -u aria2gtk-server | grep password      # the first-start password
+```
+
+Then open `http://<container-ip>:6880/` and sign in. To change the password, use the page's
+Settings, or run `aria2gtk-server.py --set-password --data /var/lib/aria2gtk-server` as the
+`aria2` user.
+
+**Tips:**
+- **Storage:** mount a disk or NAS share into the LXC (`pct set <id> -mp0 /tank/downloads,mp=/srv/downloads`)
+  so downloads land on your storage.
+- **Port forwarding:** for torrents, forward TCP and UDP port 51413 (`--bt-port`) to the container on your router.
+
+Options: `--port` (6880), `--bind` (all interfaces), `--dir`, `--data`, `--bt-port`, `--cert`/`--key`.
+Try it on any Linux PC without installing anything: `./aria2gtk-server.py --dir ~/Downloads`.
+
 ## Where things are kept
 
 `~/.local/share/aria2gtk/` holds:

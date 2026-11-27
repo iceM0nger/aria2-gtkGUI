@@ -1,0 +1,34 @@
+# systemd unit for aria2gtk-server (the web UI), e.g. in a Proxmox LXC.
+#
+#   cp aria2gtk-server.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now aria2gtk-server
+#   journalctl -u aria2gtk-server      # shows the first-start password
+#
+# Adjust User, the paths and --dir to your setup.
+[Unit]
+Description=aria2 download server with web UI (aria2gtk-server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aria2
+Group=aria2
+# /var/lib/aria2gtk-server is created for the user (password hash, session, log, DHT cache)
+StateDirectory=aria2gtk-server
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/aria2gtk-server
+ExecStart=/usr/bin/python3 /opt/aria2gtk/aria2gtk-server.py --dir /srv/downloads --data /var/lib/aria2gtk-server --port 6880
+Restart=on-failure
+RestartSec=5
+# aria2c saves its session when the server stops; give it time
+TimeoutStopSec=30
+# hardening: the service only needs its data folder and the download folder
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/downloads
+
+[Install]
+WantedBy=multi-user.target
