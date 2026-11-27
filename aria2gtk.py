@@ -10,6 +10,7 @@ Merged from share-torrent-gui.py: Seeding and Create tabs, tray, opentracker too
 """
 import base64
 import hashlib
+import importlib.util
 import gzip
 import ipaddress
 import json
@@ -1894,6 +1895,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.add(self.sharing_page())
         self.add(self.appearance_page())
         self.add(self.storage_page())
+        self.add(self.web_page())
         self.connect("closed", lambda *_: save_settings(self.win.settings))
 
     # -- pages ----------------------------------------------------------------
@@ -2401,6 +2403,115 @@ class PreferencesDialog(Adw.PreferencesDialog):
     LOG_KINDS = {"live": "This app's aria2c log",
                  "old": "Tail kept from the last trim",
                  "external": "Set in ~/.aria2/aria2.conf, written when you run aria2c yourself"}
+
+    def web_page(self):
+        page = Adw.PreferencesPage(title="Web UI", name="web",
+                                   icon_name="network-server-symbolic")
+        web = self.win.web
+        group = Adw.PreferencesGroup(
+            title="Web UI",
+            description="Watch and control these downloads from a browser on another PC, "
+                        "phone or tablet in your network, while this app runs. "
+                        "Allow the port in your firewall if the page doesn't open.")
+        self.web_switch = Adw.SwitchRow(title="Enable Web UI",
+                                        active=bool(self.win.settings.get("web_ui")))
+        self.web_switch.connect("notify::active", self.on_web_switch)
+        group.add(self.web_switch)
+        port = Adw.SpinRow.new_with_range(1024, 65535, 1)
+        port.set_title("Port")
+        port.set_value(int(self.win.settings.get("web_port", WEB_PORT)))
+        port.connect("notify::value", self.on_web_port)
+        group.add(port)
+        self.web_addr = Adw.ActionRow(title="Address", subtitle_selectable=True)
+        copy = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Copy Address",
+                          valign=Gtk.Align.CENTER, css_classes=["flat"])
+        copy.connect("clicked", lambda _b: (self.win.get_clipboard().set(web.urls()[0]),
+                                            self.add_toast(Adw.Toast(title="Address copied"))))
+        self.web_addr.add_suffix(copy)
+        group.add(self.web_addr)
+        page.add(group)
+
+        pw = Adw.PreferencesGroup(
+            title="Password",
+            description="Browsers stay signed in for 30 days. A new password signs every "
+                        "browser out.")
+        self.web_pw = Adw.PasswordEntryRow(title="New Password (8 or more characters)",
+                                           show_apply_button=True)
+        self.web_pw.connect("apply", self.on_web_password)
+        pw.add(self.web_pw)
+        page.add(pw)
+        self.show_web_state()
+        return page
+
+    def show_web_state(self):
+        web = self.win.web
+        if web.running:
+            self.web_addr.set_subtitle("\n".join(web.urls()))
+        elif web.error:
+            self.web_addr.set_subtitle(f"Not running: {web.error}")
+        else:
+            self.web_addr.set_subtitle("Off")
+
+    def on_web_switch(self, row, _p):
+        on = row.get_active()
+        web = self.win.web
+        self.win.settings["web_ui"] = on
+        save_settings(self.win.settings)
+        if not on:
+            web.stop()
+            web.error = None
+            self.show_web_state()
+            return
+        new_pw = err = None
+        try:
+            if not web.has_password():
+                new_pw = secrets.token_urlsafe(9)
+                web.set_password(new_pw)
+        except Exception as e:  # noqa: BLE001
+            err = web.error = str(e)
+        if not err:
+            err = web.start()
+        self.show_web_state()
+        if err:
+            self.add_toast(Adw.Toast(title=GLib.markup_escape_text(f"Web UI: {err}")))
+        elif new_pw:
+            self.show_new_password(new_pw)
+
+    def show_new_password(self, password):
+        dialog = Adw.AlertDialog(
+            heading="Web UI Password",
+            body=f"Sign in at {self.win.web.urls()[0]} with this password:\n\n{password}\n\n"
+                 "It is shown only now. You can set your own below.")
+        dialog.set_body_use_markup(False)
+        dialog.add_response("copy", "Copy Password")
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.connect("response", lambda _d, r: r == "copy" and self.win.get_clipboard()
+                       .set(password))
+        dialog.present(self)
+
+    def on_web_port(self, row, _p):
+        self.win.settings["web_port"] = int(row.get_value())
+        web = self.win.web
+        if web.running and web.port != int(row.get_value()):
+            web.stop()
+            err = web.start()
+            if err:
+                self.add_toast(Adw.Toast(title=GLib.markup_escape_text(f"Web UI: {err}")))
+        self.show_web_state()
+
+    def on_web_password(self, row):
+        text = row.get_text()
+        if len(text) < 8:
+            self.add_toast(Adw.Toast(title="Use at least 8 characters"))
+            return
+        try:
+            self.win.web.set_password(text)
+        except Exception as e:  # noqa: BLE001
+            self.add_toast(Adw.Toast(title=GLib.markup_escape_text(str(e))))
+            return
+        row.set_text("")
+        self.add_toast(Adw.Toast(title="Password saved. Browsers have to sign in again."))
 
     def storage_page(self):
         page = Adw.PreferencesPage(title="Storage", name="storage",
@@ -4006,6 +4117,129 @@ class Banner(Gtk.DrawingArea):
                     (acc.red, acc.green, acc.blue), self.state)
 
 
+# ----------------------------------------------------------------- web ui ---
+
+APP_DIR = Path(os.path.realpath(__file__)).parent
+WEB_DATA = DATA_DIR / "web"          # web UI password hash and sign-ins
+WEB_PORT = 6880
+
+
+def load_server_module():
+    """aria2gtk-server.py (next to this file) holds the web UI's server code; the app reuses
+    it with its own aria2c, so the browser page and the headless server stay identical."""
+    path = APP_DIR / "aria2gtk-server.py"
+    spec = importlib.util.spec_from_file_location("aria2gtk_server", path)
+    if not spec or not path.is_file():
+        raise FileNotFoundError(f"{path.name} is missing next to {Path(__file__).name}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.set_data_dir(WEB_DATA)
+    mod.GEO_DB = GEO_DB                  # share the app's country database
+    mod.DOWNLOADS = DOWNLOADS
+    return mod
+
+
+class WebUI:
+    """Serves the browser page from the app's own aria2c while the app runs."""
+
+    def __init__(self, win):
+        self.win = win
+        self.mod = None
+        self.httpd = None
+        self.port = None
+        self.error = None
+
+    @property
+    def running(self):
+        return self.httpd is not None
+
+    def module(self):
+        if self.mod is None:
+            self.mod = load_server_module()
+            WEB_DATA.mkdir(parents=True, exist_ok=True)
+            os.chmod(WEB_DATA, 0o700)
+        return self.mod
+
+    def has_password(self):
+        try:
+            return bool(self.module().load_config().get("password"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def set_password(self, password):
+        mod = self.module()
+        cfg = mod.load_config()
+        cfg["password"] = mod.hash_password(password)
+        mod.save_config(cfg)
+        (WEB_DATA / "sessions.json").unlink(missing_ok=True)   # every browser signs in again
+        if self.running:
+            mod.Handler.cfg = cfg
+            mod.Handler.engine.cfg = cfg
+            mod.Handler.sessions = {}
+
+    def start(self):
+        """Start serving; returns None, or an error message."""
+        if self.running:
+            return None
+        try:
+            mod = self.module()
+        except Exception as e:  # noqa: BLE001
+            self.error = str(e)
+            return self.error
+        win = self.win
+        cfg = mod.load_config()
+
+        class AppEngine(mod.Engine):
+            """The server's Engine, but on the app's aria2c (never starts its own)."""
+
+            def __init__(self):
+                super().__init__(cfg, win.settings.get("dir", DOWNLOADS), 0)
+
+            rpc = property(lambda self: self._rpc(), lambda self, _v: None)
+            dir = property(lambda self: str(Path(win.settings.get("dir", DOWNLOADS))
+                                            .expanduser().resolve()),
+                           lambda self, _v: None)
+            version = property(lambda self: win.aria2_version, lambda self, _v: None)
+
+            def _rpc(self):
+                live = win.rpc
+                if not live:
+                    raise RuntimeError("aria2c is not running")
+                r = mod.Aria2.__new__(mod.Aria2)
+                r.url, r.token = live.url, live.token
+                return r
+
+        port = int(win.settings.get("web_port", WEB_PORT))
+        try:
+            httpd = mod.Server(("0.0.0.0", port), mod.Handler)
+        except OSError as e:
+            self.error = f"Port {port}: {e.strerror}"
+            return self.error
+        mod.Handler.engine = AppEngine()
+        mod.Handler.cfg = cfg
+        mod.Handler.load_sessions()
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.httpd, self.port, self.error = httpd, port, None
+        win.console.event(f"Web UI on {', '.join(self.urls())}")
+        return None
+
+    def stop(self):
+        if self.httpd:
+            httpd, self.httpd = self.httpd, None
+            httpd.shutdown()
+            httpd.server_close()
+
+    def urls(self):
+        port = self.port or int(self.win.settings.get("web_port", WEB_PORT))
+        hosts = []
+        try:
+            hosts = [ip for ip in self.module().lan_addresses() if not ip.startswith("<")]
+        except Exception:  # noqa: BLE001
+            pass
+        hosts.append(socket.gethostname())
+        return [f"http://{h}:{port}/" for h in hosts]
+
+
 # --------------------------------------------------------------- console ---
 
 LOG_LEVELS = [("error", "Errors"), ("warn", "Warnings"), ("notice", "Notices"),
@@ -4230,6 +4464,8 @@ class Window(Adw.ApplicationWindow):
         self.pending_select = {}   # gid -> {"kind": "torrent"|"follow", "start": bool, "misses": n}
         self.select_dialog = None
         self.started_once = False
+        self.aria2_version = ""
+        self.web = WebUI(self)
         self.quitting = False
         self.held = False
         self.settings = settings
@@ -4409,6 +4645,11 @@ class Window(Adw.ApplicationWindow):
         self.stats.set_visible(True)
         self.add_btn.set_sensitive(True)
         self.stats.set_label(f"aria2 {ver.get('version', '')}")
+        self.aria2_version = ver.get("version", "")
+        if self.settings.get("web_ui") and not self.web.running:
+            err = self.web.start()
+            if err:
+                self.toast(f"Web UI not started: {err}")
         self.console.event(f"aria2c {ver.get('version', '')} running "
                            f"(log level {self.settings.get('console_level', 'notice')})")
         self.poll()
@@ -5187,6 +5428,7 @@ class App(Adw.Application):
     def do_shutdown(self):
         if self.win:
             self.win.tray.close()
+            self.win.web.stop()
         self.daemon.stop()
         Adw.Application.do_shutdown(self)
 

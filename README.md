@@ -40,6 +40,13 @@ To open `.torrent` files and magnet links with it, copy `io.github.aria2gtk.desk
 update-desktop-database ~/.local/share/applications
 ```
 
+## Web UI
+
+**In the desktop app:** Preferences → **Web UI** → *Enable Web UI*. While the app runs, its
+downloads can be watched and controlled from a browser on any PC, phone or tablet in your
+network. The first time, it shows a generated password (you can set your own there). The page
+is served from the app's own aria2c, so it is the same list as in the window.
+
 ## Web UI for a home server (Proxmox, NAS, …)
 
 `aria2gtk-server.py` runs aria2 on a server without a desktop, with a web page to watch and
