@@ -95,7 +95,19 @@ The page has the same banner, tabs and rows as the desktop app. It can:
   or DHT only, public or private), download it or copy its magnet, and start seeding it.
   This is built in, so the server doesn't need `mktorrent`.
 
-When the web UI runs inside the desktop app, these two tabs use the app's own Seeding list.
+- **Settings:** the same options as the app's Preferences, on tabs:
+  - Downloads, Network and BitTorrent options for aria2;
+  - Sharing: per-seed upload limit and a public IP to announce;
+  - Look: colour scheme, accent colour, banner and country flags;
+  - Storage: log files, which you can empty;
+  - Password;
+  - System: the system check.
+
+  Options that only apply after an aria2 restart are marked "restart", and the page offers
+  the restart.
+
+When the web UI runs inside the desktop app, the Seeding and Create tabs use the app's own
+Seeding list, and Settings changes the app's own preferences.
 
 **Security:**
 - **Password sign-in:** passwords are stored as a PBKDF2 hash, and sign-ins last 30 days.

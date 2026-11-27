@@ -17,10 +17,13 @@
   font-size: 15px;
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg: #fafafb; --view: #ffffff; --card: #ffffff; --card-hover: #f2f2f4;
+  :root:not([data-theme=dark]) { --bg: #fafafb; --view: #ffffff; --card: #ffffff; --card-hover: #f2f2f4;
           --fg: rgba(0,0,6,.85); --dim: rgba(0,0,6,.55); --line: rgba(0,0,6,.08);
           --error: #c01c28; --warn: #9c6e03; --ok: #1b8553; --shadow: 0 1px 3px rgba(0,0,6,.12); }
 }
+:root[data-theme=light] { --bg: #fafafb; --view: #ffffff; --card: #ffffff; --card-hover: #f2f2f4;
+          --fg: rgba(0,0,6,.85); --dim: rgba(0,0,6,.55); --line: rgba(0,0,6,.08);
+          --error: #c01c28; --warn: #9c6e03; --ok: #1b8553; --shadow: 0 1px 3px rgba(0,0,6,.12); }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
 body { display: flex; flex-direction: column; }
@@ -98,6 +101,21 @@ main { flex: 1; overflow: auto; padding: 4px 16px 16px; }
 .pane .field input[type=text] { width: 55%; }
 .field .wrap { word-break: break-all; font-size: 12.5px; color: var(--dim); }
 .ro { width: 100%; font-size: 12px; }
+
+/* settings window */
+#spanes { height: min(600px, calc(100vh - 190px)); }
+.stabs { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 0 14px 6px; }
+.stabs .btn { padding: 6px 10px; font-size: 13.5px; }
+.stabs .btn.on { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.spane h4 { margin: 6px 4px 6px; font-size: 13.5px; }
+.spane .field input[type=text] { width: 50%; }
+.spane .field input[type=number] { width: 120px; }
+.spane .field select { max-width: 55%; }
+.restart { background: color-mix(in srgb, var(--warn) 18%, var(--card)); border-radius: var(--radius);
+           padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+.restart span { flex: 1; font-size: 13.5px; }
+pre.report { margin: 0; padding: 12px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.need { font-size: 11px; color: var(--warn); font-weight: 700; margin-left: 4px; }
 
 /* status bar */
 footer { display: flex; justify-content: center; gap: 14px; padding: 6px 10px 8px; font-size: 12.5px; color: var(--dim); flex-wrap: wrap; }
@@ -324,36 +342,60 @@ td .two small { color: var(--dim); font-size: 11px; }
 </form></dialog>
 
 <!-- Settings -->
-<dialog id="setDlg"><form class="dlg" method="dialog">
+<dialog id="setDlg" class="wide"><form class="dlg" method="dialog">
   <h2>Settings</h2>
-  <div class="body">
-    <div class="group">
-      <div class="field"><label>Download limit<small>KiB/s, 0 = unlimited</small></label><input type="number" min="0" step="64" id="oDown" style="width:110px"></div>
-      <div class="field"><label>Upload limit<small>KiB/s, 0 = unlimited</small></label><input type="number" min="0" step="64" id="oUp" style="width:110px"></div>
-      <div class="field"><label>Downloads at once</label><input type="number" min="1" max="50" id="oConc" style="width:110px"></div>
-      <div class="field"><label>Connections per server</label><input type="number" min="1" max="16" id="oConn" style="width:110px"></div>
-      <div class="field"><label>Seed ratio<small>0 = seed until the seed time ends</small></label><input type="number" min="0" step="0.1" id="oRatio" style="width:110px"></div>
+  <nav class="stabs" id="stabs"></nav>
+  <div class="body" id="spanes">
+    <div class="restart hidden" id="restartBar"><span>Some changes apply after aria2 restarts. Downloads pause for a moment.</span>
+      <button type="button" class="btn raised" id="restartGo">Restart aria2 Now</button></div>
+    <div class="spane" data-pane="dl"></div>
+    <div class="spane" data-pane="net"></div>
+    <div class="spane" data-pane="bt"></div>
+    <div class="spane" data-pane="share">
+      <h4>Seeding tab</h4>
+      <div class="group">
+        <div class="field"><label>Upload limit per seed<small>KiB/s, for seeds without their own limit. 0 = unlimited</small></label>
+          <input type="number" min="0" step="64" id="shLimit"></div>
+        <div class="field"><label>Public IP to announce<small>Optional. Applies to seeds started from now on</small></label>
+          <input type="text" id="shIp" placeholder="e.g. 203.0.113.7"></div>
+      </div>
     </div>
-    <div class="group">
-      <div class="field"><label>Accent colour</label><select id="accentIn">
-        <option value="#c061cb,#9141ac">Purple</option><option value="#78aeed,#3584e4">Blue</option>
-        <option value="#5bc8af,#2190a4">Teal</option><option value="#8ff0a4,#3a944a">Green</option>
-        <option value="#f8e45c,#c88800">Yellow</option><option value="#ffa348,#ed5b00">Orange</option>
-        <option value="#ff7b63,#e62d42">Red</option><option value="#f9a8d4,#d56199">Pink</option>
-        <option value="#c0bfbc,#6f8396">Slate</option></select></div>
-      <div class="field"><label>Header banner</label><input type="checkbox" id="bannerIn" checked></div>
+    <div class="spane" data-pane="look">
+      <div class="group">
+        <div class="field"><label>Colour scheme<small>Only this browser</small></label><select id="themeIn">
+          <option value="">Follow the system</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <div class="field"><label>Accent colour</label><select id="accentIn">
+          <option value="#c061cb,#9141ac">Purple</option><option value="#78aeed,#3584e4">Blue</option>
+          <option value="#5bc8af,#2190a4">Teal</option><option value="#8ff0a4,#3a944a">Green</option>
+          <option value="#f8e45c,#c88800">Yellow</option><option value="#ffa348,#ed5b00">Orange</option>
+          <option value="#ff7b63,#e62d42">Red</option><option value="#f9a8d4,#d56199">Pink</option>
+          <option value="#c0bfbc,#6f8396">Slate</option></select></div>
+        <div class="field"><label for="bannerIn">Header banner<small>Animated strip with live speeds</small></label><input type="checkbox" id="bannerIn" checked></div>
+      </div>
+      <h4>Peer countries</h4>
+      <div class="group">
+        <div class="field"><label>Country database<small id="geoInfo"></small></label><button type="button" class="btn raised" id="geoBtn">Update</button></div>
+        <div class="field"><label for="geoAuto">Update automatically<small>Once a day, when a new edition is out</small></label><input type="checkbox" id="geoAuto"></div>
+      </div>
     </div>
-    <div class="group">
-      <div class="field"><label>Country flags<small id="geoInfo"></small></label><button type="button" class="btn raised" id="geoBtn">Update</button></div>
-      <div class="field"><label for="geoAuto">Update automatically</label><input type="checkbox" id="geoAuto"></div>
+    <div class="spane" data-pane="storage">
+      <h4>Log files</h4>
+      <div class="group" id="logList"></div>
+      <div class="hint">aria2 keeps writing to an emptied log. Big logs are trimmed automatically.</div>
     </div>
-    <div class="group">
-      <div class="field"><label>Change password</label></div>
-      <div class="field"><input type="password" id="pwOld" placeholder="Current" autocomplete="current-password" style="flex:1">
-        <input type="password" id="pwNew" placeholder="New (8+)" autocomplete="new-password" style="flex:1">
-        <button type="button" class="btn raised" id="pwBtn">Save</button></div>
+    <div class="spane" data-pane="security">
+      <h4>Change password</h4>
+      <div class="group">
+        <div class="field"><input type="password" id="pwOld" placeholder="Current" autocomplete="current-password" style="flex:1">
+          <input type="password" id="pwNew" placeholder="New (8+)" autocomplete="new-password" style="flex:1">
+          <button type="button" class="btn raised" id="pwBtn">Save</button></div>
+      </div>
+      <div class="hint">Changing it signs out every other browser.</div>
     </div>
-    <div class="hint" id="aboutInfo"></div>
+    <div class="spane" data-pane="system">
+      <div class="group"><pre class="report" id="sysReport"></pre></div>
+      <div class="hint" id="aboutInfo"></div>
+    </div>
   </div>
   <div class="foot"><button class="btn raised" value="cancel">Close</button>
     <button class="btn suggested" id="setOk" value="ok">Apply</button></div>
@@ -372,6 +414,7 @@ const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
     if (k === "class") e.className = v; else if (k === "text") e.textContent = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
   }
@@ -1072,24 +1115,148 @@ $("#dirIn").value = localStorage.getItem("a2g-dir") || "";
 
 // ---------------------------------------------------------------- settings
 function applyLook() {
+  const theme = localStorage.getItem("a2g-theme") || "";
+  if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
+  document.querySelector('meta[name=color-scheme]').content = theme || "dark light";
   const [a, bg] = (localStorage.getItem("a2g-accent") || "#c061cb,#9141ac").split(",");
   document.documentElement.style.setProperty("--accent", a);
   document.documentElement.style.setProperty("--accent-bg", bg);
   $(".banner-wrap").classList.toggle("hidden", localStorage.getItem("a2g-banner") === "0");
 }
 applyLook();
+// The Settings window. Option rows come from this list, the same options as the app's Preferences.
+const RESTART_NOTE = "applies after a restart";
+const OPT_PAGES = [
+  ["dl", "Downloads", [
+    ["Saving", [
+      { k: "auto-file-renaming", t: "Rename if the file exists", s: "Saves as file.1.ext instead of overwriting", type: "bool" },
+      { k: "file-allocation", t: "Disk space allocation", type: "choice", c: [
+        ["none", "None: fastest start, may fragment"], ["prealloc", "Preallocate: writes the whole file first"],
+        ["trunc", "Truncate: sets the size without writing"], ["falloc", "Fast (falloc): instant on ext4, btrfs, xfs"]] }]],
+    ["Queue and connections", [
+      { k: "max-concurrent-downloads", t: "Downloads at once", type: "int", min: 1, max: 100 },
+      { k: "max-connection-per-server", t: "Connections per server", s: "Also splits each file into this many parts", type: "int", min: 1, max: 16 },
+      { k: "min-split-size", t: "Minimum segment size", s: "MiB. Files smaller than twice this aren't split", type: "mib", min: 1, max: 1024 }]],
+    ["Retries", [
+      { k: "max-tries", t: "Attempts per download", s: "0 = unlimited", type: "int", min: 0, max: 100 },
+      { k: "retry-wait", t: "Wait between attempts", s: "Seconds", type: "int", min: 0, max: 600 },
+      { k: "timeout", t: "Connection timeout", s: "Seconds", type: "int", min: 1, max: 600 }]]]],
+  ["net", "Network", [
+    ["Speed limits", [
+      { k: "max-overall-download-limit", t: "Download limit", s: "KiB/s, 0 = unlimited", type: "kib", min: 0, max: 10000000, step: 64 },
+      { k: "max-overall-upload-limit", t: "Upload limit", s: "KiB/s, 0 = unlimited", type: "kib", min: 0, max: 10000000, step: 64 }]],
+    ["Connection", [
+      { k: "all-proxy", t: "Proxy", s: "e.g. http://host:3128, empty = none", type: "text" },
+      { k: "user-agent", t: "User agent", type: "text" },
+      { k: "check-certificate", t: "Verify HTTPS certificates", s: "Turning this off is insecure", type: "bool" }]]]],
+  ["bt", "BitTorrent", [
+    ["Seeding", [
+      { k: "seed-time", t: "Seed finished torrents", s: "Keep uploading after the download completes, for this many minutes", type: "seedtime" },
+      { k: "seed-ratio", t: "Ratio limit", s: "Uploaded ÷ downloaded, 0 = no ratio limit. Seeding stops at either limit", type: "float", min: 0, max: 100, step: 0.1 }]],
+    ["Peers", [
+      { k: "bt-max-peers", t: "Max peers per torrent", s: "0 = unlimited", type: "int", min: 0, max: 512 },
+      { k: "enable-dht", t: "DHT", s: "Find peers without a tracker. Also needed for udp:// trackers", type: "bool" },
+      { k: "enable-peer-exchange", t: "Peer exchange (PEX)", type: "bool" },
+      { k: "bt-enable-lpd", t: "Local peer discovery", s: "Find peers on your LAN", type: "bool" },
+      { k: "bt-require-crypto", t: "Require encryption", s: "Refuse peers that don't encrypt", type: "bool" }]],
+    ["Ports", [
+      { k: "listen-port", t: "Listen port (TCP)", s: "A port, a range like 6881-6999, or a list. Forward it on your router", type: "text" },
+      { k: "dht-listen-port", t: "DHT port (UDP)", type: "text" }]],
+    ["Trackers", [
+      { k: "bt-tracker", t: "Extra trackers", s: "Added to every torrent, comma separated", type: "text" }]]]],
+];
+const PANES = [["dl", "Downloads"], ["net", "Network"], ["bt", "BitTorrent"], ["share", "Sharing"],
+               ["look", "Look"], ["storage", "Storage"], ["security", "Password"], ["system", "System"]];
+const SET = { opts: {}, initial: {}, sharing: {}, restartKeys: [], built: false, pane: "dl" };
+const toBytes = v => { const m = String(v ?? "").trim().match(/^(\d+(?:\.\d+)?)([KkMm]?)$/); if (!m) return 0;
+  return Math.round(parseFloat(m[1]) * ({ k: 1024, m: 1048576 }[m[2].toLowerCase()] || 1)); };
+function buildSettings() {
+  if (SET.built) return;
+  SET.built = true;
+  $("#stabs").replaceChildren(...PANES.map(([id, label]) => el("button", { type: "button", class: "btn", "data-p": id, text: label,
+    onclick: () => showPane(id) })));
+  for (const [id, , groups] of OPT_PAGES) {
+    const pane = document.querySelector(`.spane[data-pane=${id}]`);
+    for (const [title, rows] of groups) {
+      const group = el("div", { class: "group" });
+      for (const o of rows) {
+        let input;
+        if (o.type === "bool") input = el("input", { type: "checkbox" });
+        else if (o.type === "choice") input = el("select", {}, ...o.c.map(([v, l]) => el("option", { value: v, text: l })));
+        else if (o.type === "text") input = el("input", { type: "text", spellcheck: "false" });
+        else if (o.type === "seedtime") {
+          const on = el("input", { type: "checkbox" }), min = el("input", { type: "number", min: 1, max: 5256000, step: 10, style: "width:110px" });
+          on.onchange = () => { min.disabled = !on.checked; };
+          input = el("span", { style: "display:flex;gap:8px;align-items:center" }, min, on);
+          input.on = on; input.min = min;
+        } else input = el("input", { type: "number", min: o.min, max: o.max, step: o.step || 1 });
+        input.id = `opt-${o.k}`; o.input = input;
+        const need = SET.restartKeys.includes(o.k) ? el("span", { class: "need", text: "restart" }) : null;
+        group.append(el("div", { class: "field" }, el("label", { for: input.id }, o.t, need, o.s ? el("small", { text: o.s }) : null), input));
+      }
+      pane.append(el("h4", { text: title }), group);
+    }
+  }
+  const net = document.querySelector(".spane[data-pane=net]");
+  net.append(el("h4", { text: "aria2" }), el("div", { class: "group" },
+    el("div", { class: "field" }, el("label", {}, "Restart aria2", el("small", { text: "Applies the options that need a restart. Downloads pause for a moment." })),
+       el("button", { type: "button", class: "btn raised", text: "Restart", onclick: restartAria2 })),
+    el("div", { class: "field" }, el("label", {}, "Forget all aria2 options", el("small", { text: "Back to the defaults, then aria2 restarts" })),
+       el("button", { type: "button", class: "btn destructive", text: "Reset", onclick: resetAria2 }))));
+}
+function showPane(id) {
+  SET.pane = id;
+  document.querySelectorAll("#stabs .btn").forEach(b => b.classList.toggle("on", b.dataset.p === id));
+  document.querySelectorAll(".spane").forEach(p => p.classList.toggle("hidden", p.dataset.pane !== id));
+}
+const allOpts = () => OPT_PAGES.flatMap(([, , groups]) => groups.flatMap(([, rows]) => rows));
+function readOpt(o) {                       // the input's value as aria2 text
+  const i = o.input;
+  if (o.type === "bool") return i.checked ? "true" : "false";
+  if (o.type === "seedtime") return i.on.checked ? String(Math.max(1, Math.floor(+i.min.value || 1440))) : "0";
+  if (o.type === "kib") { const n = Math.max(0, Math.floor(+i.value || 0)); return n ? `${n}K` : "0"; }
+  if (o.type === "mib") return `${Math.max(1, Math.floor(+i.value || 20))}M`;
+  if (o.type === "float") return (Math.max(0, +i.value || 0)).toFixed(1);
+  if (o.type === "int") return String(Math.floor(+i.value || 0));
+  return i.value.trim();
+}
+function writeOpt(o, v) {
+  const i = o.input;
+  if (o.type === "bool") i.checked = v === "true";
+  else if (o.type === "seedtime") { const n = +v || 0; i.on.checked = n > 0; i.min.value = n > 0 ? n : 1440; i.min.disabled = !n; }
+  else if (o.type === "kib") i.value = Math.round(toBytes(v) / 1024);
+  else if (o.type === "mib") i.value = Math.round(toBytes(v) / 1048576) || 1;
+  else if (o.type === "float") i.value = (+v || 0).toFixed(1);
+  else i.value = v ?? "";
+}
+function renderLogs(logs) {
+  const list = $("#logList");
+  list.replaceChildren(...(logs.length ? logs : [null]).map(l => l ? el("div", { class: "field" },
+    el("label", { text: l.name }, el("small", { class: "num", text: `${fmtSize(l.size)} · ${l.path}` })),
+    el("button", { type: "button", class: "btn raised", text: l.name.endsWith(".old") ? "Delete" : "Empty", disabled: l.size ? null : "",
+      onclick: async () => {
+        if (!await ask(`${l.name.endsWith(".old") ? "Delete" : "Empty"} ${l.name}?`, `${fmtSize(l.size)} of log text goes away.`, l.name.endsWith(".old") ? "Delete" : "Empty")) return;
+        try { await api("/api/logs", { clear: l.name }); toast("Log emptied"); renderLogs((await api("/api/settings")).logs); } catch (e) { fail(e); }
+      } })) : el("div", { class: "field dim", text: "No log files yet" })));
+}
 $("#settingsBtn").onclick = async () => {
   try {
-    const s = await api("/api/settings"), o = s.options, kib = v => Math.floor((+v || 0) / 1024);
-    $("#oDown").value = kib(o["max-overall-download-limit"]); $("#oUp").value = kib(o["max-overall-upload-limit"]);
-    $("#oConc").value = o["max-concurrent-downloads"]; $("#oConn").value = o["max-connection-per-server"];
-    $("#oRatio").value = o["seed-ratio"];
+    const s = await api("/api/settings");
+    SET.restartKeys = s.restartKeys || []; buildSettings();
+    SET.opts = s.options; SET.initial = {};
+    for (const o of allOpts()) { writeOpt(o, s.options[o.k]); SET.initial[o.k] = readOpt(o); }
+    SET.sharing = s.sharing;
+    $("#shLimit").value = s.sharing.seed_upload_limit; $("#shIp").value = s.sharing.external_ip;
+    $("#themeIn").value = localStorage.getItem("a2g-theme") || "";
     $("#accentIn").value = localStorage.getItem("a2g-accent") || "#c061cb,#9141ac";
     $("#bannerIn").checked = localStorage.getItem("a2g-banner") !== "0";
-    $("#geoInfo").textContent = s.geo.file ? `${s.geo.file} · edition ${s.geo.edition}` : "Not downloaded yet";
-    $("#geoAuto").checked = s.geo.auto;
-    $("#aboutInfo").textContent = `aria2 ${s.version} · aria2gtk-server ${s.server}${s.os ? " · " + s.os : ""} · downloads in ${s.dir} · log ${s.log}`;
-    $("#setDlg").showModal();
+    $("#geoInfo").textContent = s.geo.file ? `${s.geo.file} · edition ${s.geo.edition} · ${s.geo.credit}` : "Not downloaded yet";
+    $("#geoAuto").checked = s.geo.auto; SET.geoAuto = s.geo.auto;
+    renderLogs(s.logs);
+    $("#sysReport").textContent = s.system;
+    $("#aboutInfo").textContent = `aria2 ${s.version} · aria2gtk-server ${s.server}${s.os ? " · " + s.os : ""} · downloads in ${s.dir}`;
+    $("#restartBar").classList.add("hidden");
+    showPane(SET.pane); $("#setDlg").showModal();
   } catch (e) { fail(e); }
 };
 $("#geoBtn").onclick = async () => {
@@ -1102,20 +1269,39 @@ $("#pwBtn").onclick = async () => {
         $("#pwOld").value = $("#pwNew").value = ""; toast("Password changed. Other browsers are signed out."); }
   catch (e) { fail(e); }
 };
-$("#setDlg").addEventListener("close", async () => {
-  if ($("#setDlg").returnValue !== "ok") return;
+async function restartAria2() {
+  if (!await ask("Restart aria2?", "Downloads and seeds pause for a moment, then continue.", "Restart")) return;
+  try { toast("Restarting aria2…"); await api("/api/aria2", { action: "restart" }); $("#restartBar").classList.add("hidden"); toast("aria2 restarted"); poll(); }
+  catch (e) { fail(e); }
+}
+async function resetAria2() {
+  if (!await ask("Forget all aria2 options?", "Every option set here goes back to its default, then aria2 restarts.", "Reset")) return;
+  try { await api("/api/aria2", { action: "reset" }); toast("Options reset, aria2 restarted"); $("#setDlg").close(); poll(); }
+  catch (e) { fail(e); }
+}
+$("#restartGo").onclick = () => restartAria2();
+$("#setOk").addEventListener("click", async ev => {
+  ev.preventDefault();                       // stay open on errors; close when everything saved
+  localStorage.setItem("a2g-theme", $("#themeIn").value);
   localStorage.setItem("a2g-accent", $("#accentIn").value);
   localStorage.setItem("a2g-banner", $("#bannerIn").checked ? "1" : "0");
   applyLook();
-  const k = id => `${Math.max(0, Math.floor(+$(id).value || 0))}K`;
+  const changes = {};
+  for (const o of allOpts()) { const v = readOpt(o); if (v !== SET.initial[o.k]) changes[o.k] = v; }
   try {
-    await rpc("aria2.changeGlobalOption", {
-      "max-overall-download-limit": k("#oDown"), "max-overall-upload-limit": k("#oUp"),
-      "max-concurrent-downloads": String(Math.max(1, +$("#oConc").value || 5)),
-      "max-connection-per-server": String(Math.min(16, Math.max(1, +$("#oConn").value || 8))),
-      "seed-ratio": String(Math.max(0, +$("#oRatio").value || 0)) });
-    await api("/api/settings", { geo_auto: $("#geoAuto").checked });
-    toast("Settings saved");
+    let restart = false;
+    if (Object.keys(changes).length) {
+      const r = await api("/api/options", { options: changes });
+      restart = r.restart;
+      for (const o of allOpts()) SET.initial[o.k] = readOpt(o);
+    }
+    const sh = { seed_upload_limit: Math.max(0, Math.floor(+$("#shLimit").value || 0)), external_ip: $("#shIp").value.trim() };
+    if (sh.seed_upload_limit !== SET.sharing.seed_upload_limit || sh.external_ip !== SET.sharing.external_ip) {
+      await api("/api/sharing", sh); SET.sharing = sh;
+    }
+    if ($("#geoAuto").checked !== SET.geoAuto) { await api("/api/settings", { geo_auto: $("#geoAuto").checked }); SET.geoAuto = $("#geoAuto").checked; }
+    if (restart) { $("#restartBar").classList.remove("hidden"); toast("Saved. Some changes need an aria2 restart"); }
+    else { toast("Settings saved"); $("#setDlg").close(); }
   } catch (e) { fail(e); }
 });
 
@@ -1139,7 +1325,7 @@ const banner = (() => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, H);
     const css = getComputedStyle(document.documentElement);
     const acc = rgb(css.getPropertyValue("--accent").trim() || "#c061cb");
-    const fgs = css.getPropertyValue("--fg").trim(), fg = fgs.startsWith("#") ? rgb(fgs) : matchMedia("(prefers-color-scheme: light)").matches ? [20, 20, 26] : [255, 255, 255];
+    const fgs = css.getPropertyValue("--fg").trim(), fg = fgs.startsWith("#") ? rgb(fgs) : (document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")) === "light" ? [20, 20, 26] : [255, 255, 255];
     const e = energy(), h = H;
     let g = ctx.createLinearGradient(0, 0, w, 0);
     g.addColorStop(0, rgba(acc, .30)); g.addColorStop(.55, rgba(acc, .10)); g.addColorStop(1, rgba(acc, .16));

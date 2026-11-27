@@ -868,10 +868,6 @@ DOWNLOAD_OPTIONS = {"dir", "out", "select-file", "max-download-limit", "max-uplo
                     "seed-ratio", "seed-time", "bt-save-metadata", "bt-load-saved-metadata",
                     "check-integrity", "rpc-save-upload-metadata", "header", "referer",
                     "user-agent"}
-GLOBAL_OPTIONS = {"max-overall-download-limit", "max-overall-upload-limit",
-                  "max-concurrent-downloads", "max-connection-per-server", "split",
-                  "seed-ratio", "seed-time", "max-download-limit", "max-upload-limit",
-                  "bt-max-peers", "user-agent"}
 RPC_METHODS = {"aria2.tellActive", "aria2.tellWaiting", "aria2.tellStopped", "aria2.tellStatus",
                "aria2.getGlobalStat", "aria2.getVersion", "aria2.addUri", "aria2.addTorrent",
                "aria2.addMetalink", "aria2.pause", "aria2.unpause", "aria2.forcePause",
@@ -884,6 +880,134 @@ KEYS = ["gid", "status", "totalLength", "completedLength", "downloadSpeed", "upl
         "files", "bittorrent", "errorCode", "errorMessage", "connections", "numSeeders",
         "infoHash", "seeder", "verifiedLength", "verifyIntegrityPending", "uploadLength",
         "followedBy", "following", "numPieces", "pieceLength"]
+
+
+# ------------------------------------------------- aria2 options from the page ---
+# The Settings window's options, each with a check that returns aria2's text or raises
+# ValueError. RESTART_KEYS are ignored by changeGlobalOption: saved, used at the next start.
+
+RESTART_KEYS = {"check-certificate", "enable-dht", "listen-port", "dht-listen-port"}
+PORTS_RE = re.compile(r"^\d{1,5}(-\d{1,5})?(,\d{1,5}(-\d{1,5})?)*$")
+PROXY_RE = re.compile(r"^((https?)://)?([^\s:@/]+(:[^\s@/]*)?@)?[\w.\-]+(:\d{1,5})?/?$")
+
+
+def _opt_int(lo, hi):
+    def check(v):
+        n = int(float(v))
+        if not lo <= n <= hi:
+            raise ValueError(f"use {lo} to {hi}")
+        return str(n)
+    return check
+
+
+def _opt_size(unit, lo, hi):
+    """"100K" / "20M" style sizes; plain numbers are taken in that unit."""
+    def check(v):
+        m = re.fullmatch(r"(\d+)([KM]?)", str(v).strip().upper())
+        if not m:
+            raise ValueError(f"use a number of {unit}iB")
+        n = int(m.group(1))
+        if m.group(2) and m.group(2) != unit:
+            n = n * 1024 if m.group(2) == "M" else n // 1024
+        if not lo <= n <= hi:
+            raise ValueError(f"use {lo} to {hi}")
+        return f"{n}{unit}" if n else "0"
+    return check
+
+
+def _opt_bool(v):
+    if str(v).lower() not in ("true", "false"):
+        raise ValueError("use true or false")
+    return str(v).lower()
+
+
+def _opt_choice(*values):
+    def check(v):
+        if v not in values:
+            raise ValueError(f"use one of {', '.join(values)}")
+        return v
+    return check
+
+
+def _opt_ratio(v):
+    f = float(v)
+    if not 0 <= f <= 100:
+        raise ValueError("use 0 to 100")
+    return f"{f:.1f}"
+
+
+def _opt_ports(v):
+    v = str(v).strip()
+    if not PORTS_RE.match(v) or not all(1024 <= int(n) <= 65535 for n in re.split(r"[-,]", v)):
+        raise ValueError("use ports 1024-65535, a range like 6881-6999, or a list")
+    return v
+
+
+def _opt_proxy(v):
+    v = str(v).strip()
+    if v and not PROXY_RE.match(v):
+        raise ValueError("use http://[user:pass@]host[:port]")
+    return v
+
+
+def _opt_text(v):
+    v = str(v).strip()
+    if len(v) > 300 or "\n" in v:
+        raise ValueError("too long")
+    return v
+
+
+def _opt_trackers(v):
+    parts = [t.strip() for t in re.split(r"[,\s]+", str(v)) if t.strip()]
+    if any(not re.match(r"^(udp|https?|wss?)://\S+$", t) for t in parts):
+        raise ValueError("use udp://, http:// or https:// tracker addresses")
+    return ",".join(parts)
+
+
+OPTION_SPEC = {
+    "auto-file-renaming": _opt_bool,
+    "file-allocation": _opt_choice("none", "prealloc", "trunc", "falloc"),
+    "max-concurrent-downloads": _opt_int(1, 100),
+    "max-connection-per-server": _opt_int(1, 16),
+    "split": _opt_int(1, 64),
+    "min-split-size": _opt_size("M", 1, 1024),
+    "max-tries": _opt_int(0, 100),
+    "retry-wait": _opt_int(0, 600),
+    "timeout": _opt_int(1, 600),
+    "max-overall-download-limit": _opt_size("K", 0, 10_000_000),
+    "max-overall-upload-limit": _opt_size("K", 0, 10_000_000),
+    "max-download-limit": _opt_size("K", 0, 10_000_000),
+    "max-upload-limit": _opt_size("K", 0, 10_000_000),
+    "all-proxy": _opt_proxy,
+    "user-agent": _opt_text,
+    "check-certificate": _opt_bool,
+    "seed-ratio": _opt_ratio,
+    "seed-time": _opt_int(0, 5256000),
+    "bt-max-peers": _opt_int(0, 512),
+    "enable-dht": _opt_bool,
+    "enable-peer-exchange": _opt_bool,
+    "bt-enable-lpd": _opt_bool,
+    "bt-require-crypto": _opt_bool,
+    "listen-port": _opt_ports,
+    "dht-listen-port": _opt_ports,
+    "bt-tracker": _opt_trackers,
+}
+GLOBAL_OPTIONS = set(OPTION_SPEC)
+
+
+def check_options(changes):
+    """Validated aria2 texts for these changes; ValueError names the bad option."""
+    out = {}
+    for k, v in (changes or {}).items():
+        if k not in OPTION_SPEC:
+            raise PermissionError(f"Option not allowed: {k}")
+        try:
+            out[k] = OPTION_SPEC[k](v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"{k}: {e}") from None
+    if "max-connection-per-server" in out:          # like the app: split follows connections
+        out.setdefault("split", out["max-connection-per-server"])
+    return out
 
 
 class Aria2:
@@ -1027,9 +1151,11 @@ class Engine:
             if self.stopping:
                 break
             if self.proc and self.proc.poll() is not None:
-                print(f"aria2c exited ({self.proc.returncode}); restarting", flush=True)
                 try:
                     with self.lock:
+                        if self.proc.poll() is None:      # restart_aria2() got there first
+                            continue
+                        print(f"aria2c exited ({self.proc.returncode}); restarting", flush=True)
                         self.start()
                     self.seed_status = {}
                     self.resume_seeds()
@@ -1144,6 +1270,106 @@ class Engine:
             raise PermissionError("Folders must be inside the download folder")
         return target
 
+    # -- settings (the page's Settings window) ------------------------------------
+    # Headless: kept in server.json. The desktop app overrides these to use its own settings.
+
+    def saved_options(self):
+        return dict(self.cfg.get("aria2", {}))
+
+    def store_options(self, changes):
+        self.cfg.setdefault("aria2", {}).update(changes)
+        save_config(self.cfg)
+
+    def forget_options(self):
+        self.cfg.pop("aria2", None)
+        save_config(self.cfg)
+
+    def options(self):
+        """aria2's live options for the page, with saved restart-only values on top."""
+        live = self.rpc.call("aria2.getGlobalOption")
+        saved = self.saved_options()
+        out = {k: live.get(k, "") for k in OPTION_SPEC}
+        out.update({k: v for k, v in saved.items() if k in RESTART_KEYS})
+        return out
+
+    def set_options(self, changes):
+        """Check, apply what aria2 takes live, save all; returns whether a restart is needed."""
+        opts = check_options(changes)
+        live = {k: v for k, v in opts.items() if k not in RESTART_KEYS}
+        if live:
+            self.rpc.call("aria2.changeGlobalOption", live)
+        self.store_options(opts)
+        return {"ok": True, "restart": bool(RESTART_KEYS & opts.keys()), "applied": opts}
+
+    def restart_aria2(self):
+        """Stop aria2c (it saves its session) and start it again with the saved options."""
+        with self.lock:
+            old = self.proc
+            try:
+                self.rpc.call("aria2.forceShutdown", timeout=2)
+                old.wait(8)
+            except Exception:  # noqa: BLE001
+                if old and old.poll() is None:
+                    old.terminate()
+                    old.wait(4)
+            self.start()
+        self.seed_status = {}
+        self.resume_seeds()
+
+    def sharing(self):
+        return {"seed_upload_limit": limit_to_kib(self.cfg.get("seed_upload_limit", "0")),
+                "external_ip": self.cfg.get("external_ip", "")}
+
+    def set_sharing(self, body, target=None):
+        if target is None:
+            target = self.cfg
+        if "seed_upload_limit" in body:
+            kib = int(body["seed_upload_limit"] or 0)
+            if not 0 <= kib <= 10_000_000:
+                raise ValueError("Upload limit: use 0 to 10000000")
+            target["seed_upload_limit"] = f"{kib}K" if kib else "0"
+        if "external_ip" in body:
+            ip = str(body["external_ip"] or "").strip()
+            if ip:
+                ipaddress.ip_address(ip)          # ValueError if it isn't one
+            target["external_ip"] = ip
+        self.save_sharing()
+        return {"ok": True}
+
+    def save_sharing(self):
+        save_config(self.cfg)
+
+    def logs(self):
+        out = []
+        for path in (LOG, LOG.with_name(LOG.name + ".old")):
+            try:
+                out.append({"name": path.name, "path": str(path), "size": path.stat().st_size})
+            except OSError:
+                pass
+        return out
+
+    def clear_log(self, name):
+        for item in self.logs():
+            if item["name"] == name:
+                path = Path(item["path"])
+                if name.endswith(".old"):
+                    path.unlink(missing_ok=True)
+                else:
+                    with open(path, "r+b") as f:
+                        f.truncate(0)
+                return {"ok": True}
+        raise KeyError("No such log")
+
+    def system_report(self):
+        return deps_report(check_deps(gui=False))
+
+    def geo_auto(self):
+        return self.cfg.get("geo_auto", True)
+
+    def set_geo_auto(self, on):
+        self.cfg["geo_auto"] = on
+        save_config(self.cfg)
+
     # -- your own seeds (the Seeding tab) ---------------------------------------
     # Headless: kept in server.json. The desktop app overrides these to use its Seeding tab.
 
@@ -1167,9 +1393,16 @@ class Engine:
         raise KeyError("That seed is not on the list any more")
 
     def seed_options(self, src, upload_limit):
-        return {"dir": os.path.dirname(src), "check-integrity": "true", "seed-ratio": "0.0",
+        if upload_limit is None:
+            limit = norm_limit(self.cfg.get("seed_upload_limit", "0"))
+        else:
+            limit = f"{upload_limit}K" if upload_limit else "0"
+        opts = {"dir": os.path.dirname(src), "check-integrity": "true", "seed-ratio": "0.0",
                 "seed-time": SEED_FOREVER, "rpc-save-upload-metadata": "false",
-                "max-upload-limit": f"{upload_limit}K" if upload_limit else "0"}
+                "max-upload-limit": limit}
+        if self.cfg.get("external_ip"):
+            opts["bt-external-ip"] = self.cfg["external_ip"]
+        return opts
 
     def seed_start(self, s):
         h = s["hash"]
@@ -1554,6 +1787,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.change_password(body)
             if url.path == "/api/seed":
                 return self.send_json(self.seed(body))
+            if url.path == "/api/options":
+                return self.send_json(self.engine.set_options(body.get("options") or {}))
+            if url.path == "/api/sharing":
+                return self.send_json(self.engine.set_sharing(body))
+            if url.path == "/api/logs":
+                return self.send_json(self.engine.clear_log(str(body.get("clear", ""))))
+            if url.path == "/api/aria2":
+                if body.get("action") == "reset":
+                    self.engine.forget_options()
+                elif body.get("action") != "restart":
+                    raise ValueError("Unknown action")
+                self.engine.restart_aria2()
+                return self.send_json({"ok": True, "version": self.engine.version})
             if url.path == "/api/create":
                 return self.send_json(self.engine.create(body))
             if url.path == "/api/publicip":
@@ -1631,10 +1877,7 @@ class Handler(BaseHTTPRequestHandler):
         elif method == "aria2.changeOption" and len(params) > 1:
             params[1] = self.clean_options(params[1], DOWNLOAD_OPTIONS)
         elif method == "aria2.changeGlobalOption" and params:
-            params[0] = self.clean_options(params[0], GLOBAL_OPTIONS)
-            store = self.cfg.setdefault("aria2", {})
-            store.update(params[0])
-            save_config(self.cfg)
+            return self.engine.set_options(params[0])["ok"]
         return self.engine.rpc.call(method, *params, timeout=60)
 
     def add(self, body):
@@ -1720,18 +1963,18 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": True}
 
     def settings(self):
-        opts = self.engine.rpc.call("aria2.getGlobalOption")
+        e = self.engine
         path = geo_path()
-        return {"options": {k: opts.get(k, "") for k in sorted(GLOBAL_OPTIONS)},
-                "dir": self.engine.dir, "version": self.engine.version, "server": VERSION,
+        return {"options": e.options(), "restartKeys": sorted(RESTART_KEYS),
+                "sharing": e.sharing(), "logs": e.logs(), "system": e.system_report(),
+                "dir": e.dir, "version": e.version, "server": VERSION,
                 "geo": {"file": path.name if path else "", "edition": geo_edition() if path else "",
-                        "auto": self.cfg.get("geo_auto", True), "credit": GEO_CREDIT},
-                "log": str(LOG), "os": os_info()["name"]}
+                        "auto": e.geo_auto(), "credit": GEO_CREDIT},
+                "os": os_info()["name"]}
 
     def change_settings(self, body):
         if "geo_auto" in body:
-            self.cfg["geo_auto"] = bool(body["geo_auto"])
-            save_config(self.cfg)
+            self.engine.set_geo_auto(bool(body["geo_auto"]))
         return {"ok": True}
 
 

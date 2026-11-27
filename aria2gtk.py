@@ -4545,6 +4545,70 @@ class WebUI:
             def resume_seeds(self):
                 pass                      # the app does this itself
 
+            # The page's Settings window works on the app's own settings.
+            def saved_options(self):
+                return on_main(lambda: dict(win.settings.get("aria2", {})))
+
+            def store_options(self, changes):
+                def save():
+                    win.settings.setdefault("aria2", {}).update(changes)
+                    if "max-connection-per-server" in changes:
+                        win.settings["connections"] = int(changes["max-connection-per-server"])
+                    save_settings(win.settings)
+                on_main(save)
+
+            def forget_options(self):
+                def forget():
+                    win.settings.pop("aria2", None)
+                    win.settings.pop("connections", None)
+                    save_settings(win.settings)
+                on_main(forget)
+
+            def restart_aria2(self):
+                on_main(win.restart_aria2)
+
+            def sharing(self):
+                return {"seed_upload_limit": limit_to_kib(win.settings.get("seed_upload_limit",
+                                                                           "0")),
+                        "external_ip": win.settings.get("external_ip", "")}
+
+            def set_sharing(self, body, target=None):
+                staged = {}
+                super().set_sharing(body, staged)
+
+                def save():
+                    win.settings.update(staged)
+                    save_settings(win.settings)
+                    win.seeding.apply_upload_limit()
+                on_main(save)
+                return {"ok": True}
+
+            def save_sharing(self):
+                pass
+
+            def logs(self):
+                return [{"name": str(p).replace(str(Path.home()), "~"), "path": str(p),
+                         "size": size, "kind": kind} for p, kind, size in log_files()]
+
+            def clear_log(self, name):
+                for p, kind, _size in log_files():
+                    if str(p).replace(str(Path.home()), "~") == name:
+                        clear_log(p, kind)
+                        return {"ok": True}
+                raise KeyError("No such log")
+
+            def system_report(self):
+                return deps_report(check_deps(gui=True))
+
+            def geo_auto(self):
+                return win.settings.get("geo_auto", True)
+
+            def set_geo_auto(self, on):
+                def save():
+                    win.settings["geo_auto"] = on
+                    save_settings(win.settings)
+                on_main(save)
+
             def create_defaults(self):
                 s = win.settings
                 return {"host": s.get("tracker_host", ""),
