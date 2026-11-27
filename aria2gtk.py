@@ -150,6 +150,66 @@ def fix_magnet(uri):
     return re.sub(r"^magnet:/*", "magnet:", uri, flags=re.IGNORECASE)
 
 
+SOURCEFORGE_PAGE = re.compile(
+    r"^https?://(?:www\.)?sourceforge\.net/projects/([^/?#]+)/files/(.+?)/download/?(?:[?#].*)?$",
+    re.IGNORECASE)
+
+
+def fix_link(uri):
+    """Repair links aria2 can't use as given.
+
+    SourceForge's .../files/<path>/download is a web page that answers aria2 with 403; the same
+    file comes straight from its mirror network at downloads.sourceforge.net/project/<path>.
+    """
+    uri = fix_magnet(uri.strip())
+    m = SOURCEFORGE_PAGE.match(uri)
+    if m:
+        return f"https://downloads.sourceforge.net/project/{m.group(1)}/{m.group(2)}"
+    return uri
+
+
+def failed_for_good(d):
+    """A failure that retrying won't fix: refused (HTTP 4xx), not found, or bad login."""
+    if d.get("status") != "error":
+        return False
+    return (d.get("errorCode") in ("3", "24")
+            or re.search(r"status=4\d\d", d.get("errorMessage") or "") is not None)
+
+
+def tidy_session(drop=()):
+    """Before aria2c reads its session file: repair links (see fix_link), merge duplicates
+    (same links into the same folder) and leave out downloads that failed for good (`drop`).
+    aria2 saves failed downloads too, so otherwise they come back and fail at every start."""
+    try:
+        text = SESSION.read_text(encoding="utf-8")
+    except OSError:
+        return
+    blocks, cur = [], None
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            cur = [line]
+            blocks.append(cur)
+        elif cur is not None and line.strip():
+            cur.append(line)
+    out, seen = [], set()
+    for block in blocks:
+        uris = block[0].split("\t")
+        fixed = [fix_link(u) for u in uris if u.strip()]
+        opts = dict(ln.strip().partition("=")[::2] for ln in block[1:])
+        if opts.get("gid") in drop and fixed == uris:
+            continue                       # failed for good and nothing to repair
+        key = ("\t".join(fixed), opts.get("dir", ""), opts.get("out", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append("\n".join(["\t".join(fixed), *block[1:]]))
+    new = "\n".join(out) + ("\n" if out else "")
+    if new != text:
+        tmp = SESSION.with_suffix(".tmp")
+        tmp.write_text(new, encoding="utf-8")
+        tmp.replace(SESSION)
+
+
 def is_metadata_done(d):
     """aria2's finished 'fetch the torrent info' step of a magnet link."""
     files = d.get("files") or []
@@ -331,8 +391,9 @@ class Daemon:
         self.proc = None
         self.rpc = None
 
-    def start(self, download_dir, options=None, log_level="notice"):
+    def start(self, download_dir, options=None, log_level="notice", drop=()):
         trim_log()
+        tidy_session(drop)
         exe = shutil.which("aria2c")
         if not exe:
             raise FileNotFoundError("aria2c")
@@ -733,7 +794,8 @@ class DownloadRow(Gtk.ListBoxRow):
             uris, ddir, gid = uris_of(self.data), self.data.get("dir"), self.gid
 
             def retry():
-                rpc.call("aria2.addUri", uris, {"dir": ddir} if ddir else {})
+                rpc.call("aria2.addUri", [fix_link(u) for u in uris],
+                         {"dir": ddir} if ddir else {})
                 rpc.call("aria2.removeDownloadResult", gid)
 
             self.win.run(retry)
@@ -898,7 +960,7 @@ class AddDialog(Adw.Dialog):
                 select.append(("follow", start))
             else:
                 select.append(None)
-            calls.append(("aria2.addUri", [uri], o))
+            calls.append(("aria2.addUri", [fix_link(uri)], o))
         for path in self.files:
             o = dict(opts)
             torrent = method_for_file(path) == "aria2.addTorrent"
@@ -4261,7 +4323,8 @@ class Window(Adw.ApplicationWindow):
                 if restart:
                     self.app.daemon.stop()
                 ver = self.app.daemon.start(ddir, options,
-                                            self.settings.get("console_level", "notice"))
+                                            self.settings.get("console_level", "notice"),
+                                            set(self.settings.pop("drop_gids", [])))
                 GLib.idle_add(self.on_started, ver)
             except FileNotFoundError:
                 GLib.idle_add(self.fatal, "aria2c Not Found",
@@ -4404,6 +4467,12 @@ class Window(Adw.ApplicationWindow):
                 continue
             gid = d["gid"]
             seen.add(gid)
+            if failed_for_good(d):           # don't bring it back at the next start
+                drop = self.settings.setdefault("drop_gids", [])
+                if gid not in drop:
+                    drop.append(gid)
+                    del drop[:-200]
+                    save_settings(self.settings)
             row = self.rows.get(gid)
             if row is None:
                 row = self.rows[gid] = DownloadRow(self, gid)
