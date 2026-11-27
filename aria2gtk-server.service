@@ -1,4 +1,4 @@
-# systemd unit for aria2gtk-server (the web UI), e.g. in a Proxmox LXC.
+# systemd unit: aria2gtk as a headless web UI server, e.g. in a Proxmox LXC.
 #
 #   cp aria2gtk-server.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now aria2gtk-server
@@ -18,7 +18,7 @@ Group=aria2
 StateDirectory=aria2gtk-server
 StateDirectoryMode=0700
 Environment=HOME=/var/lib/aria2gtk-server
-ExecStart=/usr/bin/python3 /opt/aria2gtk/aria2gtk-server.py --dir /srv/downloads --data /var/lib/aria2gtk-server --port 6880
+ExecStart=/usr/bin/python3 /opt/aria2gtk/aria2gtk.py --headless --dir /srv/downloads --data /var/lib/aria2gtk-server --port 6880
 Restart=on-failure
 RestartSec=5
 # aria2c saves its session when the server stops; give it time

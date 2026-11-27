@@ -30,8 +30,46 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import cairo
-from urllib.parse import quote, unquote, unquote_to_bytes, urlparse
+
+def _no_gui_reason():
+    """Why the window can't open here (None if it can): no display, or no GTK installed."""
+    if "--headless" in sys.argv:
+        return "--headless was given"
+    if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        return "no graphical display (WAYLAND_DISPLAY / DISPLAY are not set)"
+    try:
+        import cairo  # noqa: F401
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Adw", "1")
+        from gi.repository import Adw, Gtk  # noqa: F401
+    except (ImportError, ValueError) as e:
+        return f"GTK 4 / libadwaita are not available ({e})"
+    return None
+
+
+def _run_headless(reason):
+    """No window possible: serve the web UI instead (aria2gtk-server.py, next to this file)."""
+    import importlib.util
+    path = Path(os.path.realpath(__file__)).parent / "aria2gtk-server.py"
+    if not path.is_file():
+        raise SystemExit(f"Cannot open a window ({reason}) and {path.name} is missing.")
+    print(f"aria2gtk: {reason}; starting the web UI instead.", flush=True)
+    spec = importlib.util.spec_from_file_location("aria2gtk_server", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sys.argv = [str(path)] + [a for a in sys.argv[1:] if a not in ("--headless", "--hidden")]
+    mod.main()
+    raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    _reason = _no_gui_reason()
+    if _reason:
+        _run_headless(_reason)
+
+import cairo  # noqa: E402
+from urllib.parse import quote, unquote, unquote_to_bytes, urlparse  # noqa: E402
 
 import gi  # noqa: E402
 

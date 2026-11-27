@@ -1092,7 +1092,9 @@ def main():
     ap.add_argument("--cert", help="TLS certificate (PEM) to serve https")
     ap.add_argument("--key", help="TLS private key (PEM)")
     ap.add_argument("--set-password", action="store_true", help="set the web UI password and exit")
-    args = ap.parse_args()
+    args, extra = ap.parse_known_args()
+    if extra:
+        print(f"Ignoring options the web UI doesn't use: {' '.join(extra)}", flush=True)
 
     global DOWNLOADS
     set_data_dir(args.data)

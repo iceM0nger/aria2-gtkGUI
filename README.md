@@ -49,9 +49,11 @@ is served from the app's own aria2c, so it is the same list as in the window.
 
 ## Web UI for a home server (Proxmox, NAS, …)
 
-`aria2gtk-server.py` runs aria2 on a server without a desktop, with a web page to watch and
-control it from any browser on your network: PC, phone or tablet. It needs only `aria2` and
-`python3` (no GTK), so a small Debian LXC is enough.
+The same `aria2gtk.py` runs on a server without a desktop: when it finds no graphical display
+(an LXC, SSH, a systemd service) or no GTK installed, it starts the web UI server instead of the
+window, and says why. `--headless` forces this mode on a desktop too. It then needs only `aria2`
+and `python3`, so a small Debian LXC is enough. (The server code lives in `aria2gtk-server.py`,
+which must stay next to `aria2gtk.py`.)
 
 ![The web UI in a browser](screenshots/web.jpg)
 
@@ -82,7 +84,7 @@ journalctl -u aria2gtk-server | grep password      # the first-start password
 ```
 
 Then open `http://<container-ip>:6880/` and sign in. To change the password, use the page's
-Settings, or run `aria2gtk-server.py --set-password --data /var/lib/aria2gtk-server` as the
+Settings, or run `aria2gtk.py --headless --set-password --data /var/lib/aria2gtk-server` as the
 `aria2` user.
 
 **Tips:**
@@ -91,7 +93,7 @@ Settings, or run `aria2gtk-server.py --set-password --data /var/lib/aria2gtk-ser
 - **Port forwarding:** for torrents, forward TCP and UDP port 51413 (`--bt-port`) to the container on your router.
 
 Options: `--port` (6880), `--bind` (all interfaces), `--dir`, `--data`, `--bt-port`, `--cert`/`--key`.
-Try it on any Linux PC without installing anything: `./aria2gtk-server.py --dir ~/Downloads`.
+Try it on any Linux PC: `./aria2gtk.py --headless --dir ~/Downloads`.
 
 ## Where things are kept
 
