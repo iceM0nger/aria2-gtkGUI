@@ -25,6 +25,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
 body { display: flex; flex-direction: column; }
 button { font: inherit; color: inherit; }
+a.btn { color: inherit; text-decoration: none; }
 .num { font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .hidden { display: none !important; }
@@ -89,6 +90,15 @@ main { flex: 1; overflow: auto; padding: 4px 16px 16px; }
         border-top-color: var(--accent); animation: rot 1s linear infinite; }
 @keyframes rot { to { transform: rotate(360deg); } }
 
+/* seeding toolbar and create form */
+.toolbar { max-width: 900px; margin: 0 auto 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.toolbar .grow { flex: 1; }
+.pane { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.pane h3 { margin: 4px 4px -6px; font-size: 14px; }
+.pane .field input[type=text] { width: 55%; }
+.field .wrap { word-break: break-all; font-size: 12.5px; color: var(--dim); }
+.ro { width: 100%; font-size: 12px; }
+
 /* status bar */
 footer { display: flex; justify-content: center; gap: 14px; padding: 6px 10px 8px; font-size: 12.5px; color: var(--dim); flex-wrap: wrap; }
 #beat { transition: color 1s; }
@@ -149,6 +159,8 @@ td .two small { color: var(--dim); font-size: 11px; }
 @media (max-width: 640px) {
   main { padding: 4px 6px 12px; }
   .row .acts .opt { display: none; }
+  .pane .field { flex-wrap: wrap; }
+  .pane .field input[type=text] { width: 100%; }
   nav.tabs .btn span.t { display: none; }
   header .title { font-size: 14px; }
 }
@@ -186,9 +198,54 @@ td .two small { color: var(--dim); font-size: 11px; }
   <button class="btn on" data-tab="active"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v9M8.5 12.5 12 16l3.5-3.5"/></svg><span class="t">Downloading</span><b class="badge hidden"></b></button>
   <button class="btn" data-tab="queued"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9"/></svg><span class="t">Queued</span><b class="badge hidden"></b></button>
   <button class="btn" data-tab="done"><svg class="i" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span class="t">Finished</span><b class="badge hidden"></b></button>
+  <button class="btn" data-tab="seeding"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg><span class="t">Seeding</span><b class="badge hidden"></b></button>
+  <button class="btn" data-tab="create"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14h6"/></svg><span class="t">Create</span><b class="badge hidden"></b></button>
 </nav>
 
 <main>
+  <div class="toolbar hidden" id="seedTools">
+    <button class="btn suggested" id="seedAddBtn" type="button">Add Seed</button>
+    <span class="hint grow">Your own torrents: the server checks the files, then seeds until you stop it.</span>
+    <button class="btn raised" id="seedStartAll" type="button">Start All</button>
+    <button class="btn raised" id="seedPauseAll" type="button">Pause All</button>
+  </div>
+  <div class="pane hidden" id="createPane">
+    <h3>What to Share</h3>
+    <div class="group">
+      <div class="field"><label>Folder or file<small id="cBase"></small></label>
+        <input type="text" id="cSrc" list="cSrcList" placeholder="e.g. Photos/Holiday"></div>
+      <datalist id="cSrcList"></datalist>
+    </div>
+    <h3>Tracker</h3>
+    <div class="group">
+      <div class="field"><label>Public IP or domain<small>Your opentracker. Empty: no tracker (DHT only).</small></label>
+        <input type="text" id="cHost" style="width:38%"><button class="btn raised" type="button" id="cDetect">Detect</button></div>
+      <div class="field"><label>Tracker port<small>Forward it (TCP and UDP) on your router</small></label>
+        <input type="text" id="cPort" style="width:110px" inputmode="numeric"></div>
+      <div class="field"><label>Extra trackers<small>Optional, space separated</small></label>
+        <input type="text" id="cExtra"></div>
+    </div>
+    <h3>Options</h3>
+    <div class="group">
+      <div class="field"><label>Piece size<small>Auto picks a good size from the total size</small></label><select id="cPiece"></select></div>
+      <div class="field"><label for="cPrivate">Private torrent<small>Only your tracker, no DHT. Friends need the .torrent file (a magnet won't work).</small></label>
+        <input type="checkbox" id="cPrivate"></div>
+    </div>
+    <button class="btn suggested" type="button" id="cGo" style="align-self:center;padding:10px 26px;border-radius:99px">Create Torrent</button>
+    <div id="cProg" class="hidden"><div class="bar"><i></i></div><div class="hint num" id="cStatus" style="margin-top:6px;text-align:center"></div></div>
+    <div id="cErr" class="hint" style="color:var(--error);text-align:center"></div>
+    <div id="cDone" class="hidden">
+      <h3 style="margin-bottom:8px">Done</h3>
+      <div class="group">
+        <div class="field"><label>Torrent file<small class="wrap" id="cFile"></small></label>
+          <a class="btn raised" id="cDownload" download>Download .torrent</a></div>
+        <div class="field" id="cMagRow"><label>Magnet link<input class="ro" id="cMagnet" readonly></label>
+          <button class="btn raised" type="button" id="cCopy">Copy</button></div>
+        <div class="field"><label>Start sharing now<small>Adds it to the Seeding tab and starts seeding</small></label>
+          <button class="btn suggested" type="button" id="cSeed">Seed Now</button></div>
+      </div>
+    </div>
+  </div>
   <div class="list" id="list"></div>
   <div class="empty hidden" id="empty">
     <svg class="i" viewBox="0 0 24 24" style="width:64px;height:64px;opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v9M8.5 12.5 12 16l3.5-3.5"/></svg>
@@ -222,6 +279,24 @@ td .two small { color: var(--dim); font-size: 11px; }
   </div>
   <div class="foot"><button class="btn raised" value="cancel">Cancel</button>
     <button class="btn suggested" id="addGo" value="go">Download</button></div>
+</form></dialog>
+
+<!-- Add Seed -->
+<dialog id="seedDlg"><form class="dlg" method="dialog">
+  <h2>Add a Seed</h2>
+  <div class="body">
+    <div class="hint">Pick the .torrent, and the folder on the server that holds the data it was made from.</div>
+    <div class="drop" id="seedDrop">Drop the <b>.torrent</b> file here, or click to choose
+      <input type="file" id="seedFileIn" accept=".torrent" hidden></div>
+    <div id="seedFile" class="hint"></div>
+    <div class="group">
+      <div class="field"><label>Folder that holds the data<small id="seedBase"></small></label>
+        <input type="text" id="seedDir" list="seedDirList" placeholder="(download folder)" style="width:55%"></div>
+      <datalist id="seedDirList"></datalist>
+    </div>
+  </div>
+  <div class="foot"><button class="btn raised" value="cancel">Cancel</button>
+    <button class="btn suggested" id="seedGo" value="go">Add Seed</button></div>
 </form></dialog>
 
 <!-- Files -->
@@ -316,6 +391,7 @@ const ICONS = {
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   peers: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.5 5.2"/>',
   files: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14l3 3 3-3"/>',
   gauge: '<path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-5"/><circle cx="12" cy="13.5" r="1.3"/>',
 };
 const icon = (name, cls = "i") => `<svg class="${cls}" viewBox="0 0 24 24">${ICONS[name]}</svg>`;
@@ -386,12 +462,14 @@ $("#logoutBtn").onclick = async () => { try { await api("/api/logout", {}); } ca
 
 // ---------------------------------------------------------------- state
 const S = { items: [], tab: "active", sel: null, rows: new Map(), limits: new Map(), seen: new Map(),
-            pendingFollow: new Set(), confirmed: new Set(), stat: {}, failedPolls: 0 };
+            pendingFollow: new Set(), confirmed: new Set(), stat: {}, failedPolls: 0,
+            seeds: [], seedRows: new Map(), job: {} };
 const PAGE = { active: "active", waiting: "queued", paused: "queued", complete: "done", error: "done", removed: "done" };
 document.querySelectorAll("#tabs .btn").forEach(b => b.onclick = () => {
   S.tab = b.dataset.tab;
   document.querySelectorAll("#tabs .btn").forEach(x => x.classList.toggle("on", x === b));
   render();
+  if (S.tab === "create") loadCreate();
 });
 
 async function poll() {
@@ -399,6 +477,7 @@ async function poll() {
   try {
     const st = await api("/api/state");
     S.items = st.items; S.stat = st.stat; S.disk = st.disk; S.dir = st.dir; S.failedPolls = 0;
+    S.seeds = st.seeds || []; S.job = st.job || {};
     beat(); render(); banner.push(fixSpeed(st.stat.downloadSpeed), fixSpeed(st.stat.uploadSpeed));
     checkFollowers();
   } catch (e) {
@@ -521,35 +600,220 @@ function updateRow(r, d) {
 function render() {
   const groups = { active: [], queued: [], done: [] };
   for (const d of S.items) groups[PAGE[d.status] || "done"].push(d);
+  const seedsRunning = S.seeds.filter(x => x.status === "active" || x.status === "waiting").length;
+  const badges = { active: groups.active.length, queued: groups.queued.length, seeding: seedsRunning };
   document.querySelectorAll("#tabs .btn").forEach(b => {
-    const n = groups[b.dataset.tab].length, badge = b.querySelector(".badge");
-    badge.textContent = n; badge.classList.toggle("hidden", !n || b.dataset.tab === "done");
+    const n = badges[b.dataset.tab] || 0, badge = b.querySelector(".badge");
+    badge.textContent = n; badge.classList.toggle("hidden", !n);
   });
-  const list = $("#list"), show = groups[S.tab], keep = new Set();
-  show.forEach((d, i) => {
-    const r = S.rows.get(d.gid) || makeRow(d.gid);
-    updateRow(r, d); keep.add(d.gid);
-    if (list.children[i] !== r.el) list.insertBefore(r.el, list.children[i] || null);
-  });
-  [...list.children].forEach(c => { if (![...keep].some(g => S.rows.get(g).el === c)) c.remove(); });
+  const list = $("#list"), keep = [];
+  if (S.tab === "seeding") {
+    S.seeds.forEach(v => { const r = S.seedRows.get(v.id) || makeSeedRow(v.id); updateSeedRow(r, v); keep.push(r.el); });
+  } else if (S.tab !== "create") {
+    groups[S.tab].forEach(d => { const r = S.rows.get(d.gid) || makeRow(d.gid); updateRow(r, d); keep.push(r.el); });
+  }
+  keep.forEach((e, i) => { if (list.children[i] !== e) list.insertBefore(e, list.children[i] || null); });
+  [...list.children].forEach(c => { if (!keep.includes(c)) c.remove(); });
   const all = new Set(S.items.map(d => d.gid));
   for (const g of [...S.rows.keys()]) if (!all.has(g)) { S.rows.delete(g); S.limits.delete(g); }
-  list.classList.toggle("hidden", !show.length);
-  $("#empty").classList.toggle("hidden", !!show.length);
+  const ids = new Set(S.seeds.map(v => v.id));
+  for (const id of [...S.seedRows.keys()]) if (!ids.has(id)) S.seedRows.delete(id);
+  $("#seedTools").classList.toggle("hidden", S.tab !== "seeding");
+  $("#createPane").classList.toggle("hidden", S.tab !== "create");
+  list.classList.toggle("hidden", !keep.length);
+  $("#empty").classList.toggle("hidden", !!keep.length || S.tab === "create");
   const texts = { active: ["No active downloads", "Add a link, a magnet or a .torrent file with Add."],
                   queued: ["Nothing queued", "Paused and waiting downloads appear here."],
-                  done: ["Nothing finished yet", "Completed and failed downloads appear here."] };
+                  done: ["Nothing finished yet", "Completed and failed downloads appear here."],
+                  seeding: ["No seeds yet", "Add one with Add Seed, or make one on the Create tab."],
+                  create: ["", ""] };
   $("#emptyTitle").textContent = texts[S.tab][0]; $("#emptyText").textContent = texts[S.tab][1];
+  if (S.tab === "create" || S.job.running) renderJob();
   // status bar
   $("#sDown").textContent = `↓ ${fmtSpeed(S.stat.downloadSpeed)}`;
   $("#sUp").textContent = `↑ ${fmtSpeed(S.stat.uploadSpeed)}`;
-  const seeding = S.items.filter(d => d.status === "active" && d.seeding).length;
-  const act = groups.active.length - seeding;
+  const seeding = S.items.filter(d => d.status === "active" && d.seeding).length +
+                  S.seeds.filter(x => x.status === "active" && x.seeder).length;
+  const act = groups.active.length - S.items.filter(d => d.status === "active" && d.seeding).length;
   $("#sCount").textContent = `${act} active${seeding ? ` · ${seeding} seeding` : ""}${groups.queued.length ? ` · ${groups.queued.length} queued` : ""}`;
   $("#sDisk").textContent = S.disk && S.disk.free != null ? `${fmtSize(S.disk.free)} free` : "";
   $("#sDisk").title = S.dir || "";
   banner.counts(act, seeding);
 }
+
+// ---------------------------------------------------------------- your seeds
+function describeSeed(v) {
+  const peers = n => `${n} peer${n !== 1 ? "s" : ""}`;
+  const lim = v.limit ? `max ↑ ${fmtSize(v.limit * 1024)}/s` : "";
+  let text, ico = "seed", busy = false, bar = null;
+  if (v.error) { text = v.error.startsWith("Error") ? v.error : `Error: ${v.error}`; ico = "error"; }
+  else if (v.status === "paused") { text = "Paused"; ico = "paused"; }
+  else if (v.status === "waiting") { text = "Waiting…"; busy = true; }
+  else if (v.status === "active") {
+    if (v.pending) { text = "Waiting to check the files…"; busy = true; }
+    else if (v.total && v.verified > 0 && v.verified < v.total) {
+      text = `Checking the files… ${Math.floor(v.verified * 100 / v.total)}%`; busy = true; bar = v.verified / v.total; }
+    else if (v.seeder) {
+      text = ["Seeding", peers(v.peers), `↑ ${fmtSpeed(v.up)}`, `sent ${fmtSize(v.sent)}`].join("  ·  "); }
+    else { text = "Starting…"; busy = true; }
+  } else if (v.want) { text = "Starting…"; busy = true; }
+  else { text = "Stopped"; ico = "paused"; }
+  if (lim && !v.error) text += `  ·  ${lim}`;
+  return { text, ico, busy, bar, running: v.status === "active" || v.status === "waiting" };
+}
+function makeSeedRow(id) {
+  const r = { id };
+  r.el = el("div", { class: "row" });
+  r.ico = el("div", { class: "ico" });
+  r.name = el("div", { class: "name" }); r.sub = el("div", { class: "sub num" });
+  const mk = (ic, tip, fn, cls = "") => {
+    const b = el("button", { class: `btn circle ${cls}`, title: tip, type: "button" });
+    b.innerHTML = icon(ic); b.onclick = ev => { ev.stopPropagation(); fn(ev); }; return b;
+  };
+  r.toggle = mk("pause", "Pause", () => seedAct("toggle", id));
+  r.peers = mk("peers", "Peers", () => r.v.gid && openPeers(r.v.gid, r.v.name), "opt");
+  r.file = el("a", { class: "btn circle opt", title: "Download the .torrent", href: `/api/torrent?id=${encodeURIComponent(id)}`, download: "" });
+  r.file.innerHTML = icon("file");
+  r.limit = mk("gauge", "Upload limit", ev => openSeedLimit(id, ev.clientX, ev.clientY), "opt");
+  r.trash = mk("trash", "Remove from the list", () => removeSeed(id));
+  r.bar = el("div", { class: "bar hidden" }, el("i"));
+  r.el.append(el("div", { class: "top" }, r.ico, el("div", { class: "txt" }, r.name, r.sub),
+                 el("div", { class: "acts" }, r.toggle, r.peers, r.file, r.limit, r.trash)), r.bar);
+  r.el.oncontextmenu = ev => { ev.preventDefault(); openSeedLimit(id, ev.clientX, ev.clientY); };
+  S.seedRows.set(id, r);
+  return r;
+}
+function updateSeedRow(r, v) {
+  const x = describeSeed(v);
+  r.v = v;
+  r.name.textContent = v.name; r.name.title = v.source;
+  r.sub.textContent = x.text; r.sub.title = `${v.source}\n${x.text}`;
+  const key = x.busy ? "busy" : x.ico;
+  if (r.icoKey !== key) { r.icoKey = key; r.ico.innerHTML = x.busy ? '<div class="spin"></div>' : icon(x.ico); }
+  r.el.classList.toggle("err", !!v.error);
+  r.toggle.innerHTML = icon(x.running ? "pause" : "play");
+  r.toggle.title = x.running ? "Pause" : "Start seeding";
+  r.peers.classList.toggle("hidden", v.status !== "active");
+  r.bar.classList.toggle("hidden", x.bar == null);
+  if (x.bar != null) r.bar.firstChild.style.width = `${(x.bar * 100).toFixed(2)}%`;
+}
+async function seedAct(action, id, extra = {}) {
+  try { await api("/api/seed", { action, id, ...extra }); poll(); } catch (e) { fail(e); }
+}
+async function removeSeed(id) {
+  const v = S.seedRows.get(id)?.v; if (!v) return;
+  if (!await ask(`Stop seeding “${v.name}”?`, "It leaves the list. The data and the .torrent file stay on the server.")) return;
+  seedAct("remove", id);
+}
+$("#seedStartAll").onclick = () => seedAct("startAll", "");
+$("#seedPauseAll").onclick = () => seedAct("pauseAll", "");
+function openSeedLimit(id, x, y) {
+  const v = S.seedRows.get(id)?.v; if (!v) return;
+  limitPopover(v.name, ["up"], { up: v.limit || 0 }, lim => seedAct("limit", id, { kib: lim.up }), x, y);
+}
+
+// add seed
+let seedTorrent = null;
+$("#seedAddBtn").onclick = async () => {
+  seedTorrent = null; $("#seedFile").textContent = ""; $("#seedDlg").showModal();
+  fillDirs("#seedDir", "#seedDirList", "#seedBase");
+};
+async function fillDirs(input, listSel, baseSel, files = false) {
+  const v = $(input).value, parent = v.includes("/") ? v.slice(0, v.lastIndexOf("/")) : "";
+  try {
+    const r = await api(`/api/dirs?path=${encodeURIComponent(parent)}${files ? "&files=1" : ""}`);
+    if (baseSel) $(baseSel).textContent = `Inside ${r.base}`;
+    const pre = r.path ? r.path + "/" : "";
+    $(listSel).replaceChildren(...r.dirs.map(n => el("option", { value: pre + n })),
+                               ...(r.files || []).map(n => el("option", { value: pre + n })));
+  } catch (_) {}
+}
+$("#seedDir").addEventListener("input", () => fillDirs("#seedDir", "#seedDirList"));
+async function takeSeedFile(f) {
+  if (!f) return;
+  if (!/\.torrent$/i.test(f.name)) { toast("Choose a .torrent file"); return; }
+  const buf = new Uint8Array(await f.arrayBuffer());
+  let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  seedTorrent = { name: f.name, data: btoa(bin) }; $("#seedFile").textContent = `Torrent: ${f.name}`;
+}
+const seedDrop = $("#seedDrop");
+seedDrop.onclick = () => $("#seedFileIn").click();
+$("#seedFileIn").onchange = ev => takeSeedFile(ev.target.files[0]);
+["dragenter", "dragover"].forEach(t => seedDrop.addEventListener(t, ev => { ev.preventDefault(); seedDrop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => seedDrop.addEventListener(t, ev => { ev.preventDefault(); seedDrop.classList.remove("over"); }));
+seedDrop.addEventListener("drop", ev => { ev.stopPropagation(); takeSeedFile(ev.dataTransfer.files[0]); });
+$("#seedGo").addEventListener("click", ev => { if (!seedTorrent) { ev.preventDefault(); toast("Choose the .torrent file first"); } });
+$("#seedDlg").addEventListener("close", async () => {
+  if ($("#seedDlg").returnValue !== "go" || !seedTorrent) return;
+  try {
+    await api("/api/seed", { action: "add", torrent: seedTorrent.data, dir: $("#seedDir").value.trim() });
+    toast("Seed added: checking the files"); poll();
+  } catch (e) { fail(e); }
+});
+
+// ---------------------------------------------------------------- create
+let createLoaded = false;
+async function loadCreate() {
+  fillDirs("#cSrc", "#cSrcList", "#cBase", true);
+  if (createLoaded) return;
+  try {
+    const r = await api("/api/create"), d = r.defaults;
+    $("#cPiece").replaceChildren(...r.pieces.map((t, i) => el("option", { value: i, text: t })));
+    $("#cHost").value = d.host; $("#cPort").value = d.port; $("#cExtra").value = d.extra;
+    $("#cPiece").value = d.piece; $("#cPrivate").checked = d.private;
+    S.job = r.job || {}; createLoaded = true; renderJob();
+  } catch (e) { fail(e); }
+}
+$("#cSrc").addEventListener("input", () => fillDirs("#cSrc", "#cSrcList", null, true));
+$("#cDetect").onclick = async () => {
+  toast("Detecting the public IP…");
+  try { const r = await api("/api/publicip", {}); $("#cHost").value = r.ip; toast(`Public IP: ${r.ip}`); }
+  catch (e) { toast("Could not detect the IP, type it in"); }
+};
+let jobShown = null;
+$("#cGo").onclick = async () => {
+  $("#cErr").textContent = "";
+  try {
+    await api("/api/create", { source: $("#cSrc").value.trim(), host: $("#cHost").value.trim(),
+      port: $("#cPort").value.trim(), extra: $("#cExtra").value.trim(),
+      piece: +$("#cPiece").value, private: $("#cPrivate").checked });
+    jobShown = null; S.job = { running: true, progress: 0, name: $("#cSrc").value.trim() }; renderJob(); poll();
+  } catch (e) { $("#cErr").textContent = e.message; }
+};
+function renderJob() {
+  const j = S.job || {};
+  $("#cGo").disabled = !!j.running;
+  $("#cProg").classList.toggle("hidden", !j.running);
+  if (j.running) {
+    $("#cProg i").style.width = `${((j.progress || 0) * 100).toFixed(1)}%`;
+    $("#cStatus").textContent = `Hashing “${j.name}”… ${Math.floor((j.progress || 0) * 100)}%`;
+  }
+  if (!j.running && j.error && jobShown !== "e" + j.error) { jobShown = "e" + j.error; $("#cErr").textContent = j.error; }
+  const ok = !j.running && j.torrent;
+  $("#cDone").classList.toggle("hidden", !ok);
+  if (ok && jobShown !== j.hash) {
+    jobShown = j.hash;
+    $("#cFile").textContent = j.torrent;
+    $("#cDownload").href = `/api/torrent?id=${encodeURIComponent(j.hash)}`;
+    $("#cMagRow").classList.toggle("hidden", !j.magnet);
+    $("#cMagnet").value = j.magnet || "";
+    $("#cSeed").disabled = S.seeds.some(v => v.id === j.hash);
+    if (S.tab === "create") toast("Torrent created");
+  }
+  if (ok) $("#cSeed").disabled = S.seeds.some(v => v.id === j.hash);
+}
+$("#cCopy").onclick = async () => {
+  const t = $("#cMagnet");
+  try { await navigator.clipboard.writeText(t.value); }
+  catch (_) { t.select(); document.execCommand("copy"); }
+  toast("Magnet copied");
+};
+$("#cSeed").onclick = async () => {
+  try {
+    await api("/api/seed", { action: "add", job: true });
+    toast("Seeding started"); $("#tabs .btn[data-tab=seeding]").click(); poll();
+  } catch (e) { fail(e); }
+};
 
 // ---------------------------------------------------------------- actions
 async function toggle(gid) {
@@ -606,28 +870,29 @@ document.addEventListener("pointerdown", ev => { if (pop && !pop.contains(ev.tar
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") closePop(); });
 function openLimits(gid, x, y) {
   const d = S.rows.get(gid)?.d; if (!d || !["active", "waiting", "paused"].includes(d.status)) return;
-  closePop();
   const total = +d.totalLength || 0, done = +d.completedLength || 0;
   const finished = total && done >= total;
   const kinds = finished ? ["up"] : d.isBt ? ["down", "up"] : ["down"];
-  const lim = { ...(S.limits.get(gid) || { down: 0, up: 0 }) };
-  pop = el("div", { class: "pop" }, el("b", { text: "Speed Limits" }),
-           el("div", { class: "hint", text: d.name, style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }));
-  let timer = 0;
-  const send = () => {
+  limitPopover(d.name, kinds, { ...(S.limits.get(gid) || { down: 0, up: 0 }) }, lim => {
     S.limits.set(gid, { ...lim });
     rpc("aria2.changeOption", gid, {
       "max-download-limit": lim.down ? `${lim.down}K` : "0",
       "max-upload-limit": lim.up ? `${lim.up}K` : "0" }).catch(fail);
     render();
-  };
+  }, x, y);
+}
+function limitPopover(name, kinds, lim, apply, x, y) {
+  closePop();
+  pop = el("div", { class: "pop" }, el("b", { text: kinds.length > 1 ? "Speed Limits" : "Upload Limit" }),
+           el("div", { class: "hint", text: name, style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }));
+  let timer = 0;
   const ranges = [];
   for (const k of kinds) {
     const val = el("span", { class: "num dim" });
     const r = el("input", { type: "range", min: 0, max: STEPS.length - 1, step: 1 });
     r.value = stepOf(lim[k]); val.textContent = limitText(lim[k]);
     r.oninput = () => { lim[k] = STEPS[+r.value]; val.textContent = limitText(lim[k]);
-                        clearTimeout(timer); timer = setTimeout(send, 250); };
+                        clearTimeout(timer); timer = setTimeout(() => apply({ ...lim }), 250); };
     ranges.push(r);
     pop.append(el("div", { class: "lab" }, el("span", { text: k === "up" ? "Upload" : "Download" }), val), r,
                el("div", { class: "ticks" }, ...["16 kB/s", "1 MB/s", "16 MB/s", "∞"].map(t => el("span", { text: t }))));
@@ -721,8 +986,8 @@ async function loadPeers() {
   } catch (e) { $("#pFoot").textContent = e.message; }
   peersTimer = setTimeout(loadPeers, 2000);
 }
-function openPeers(gid) {
-  peersGid = gid; $("#peersTitle").textContent = `Peers · ${S.rows.get(gid)?.d?.name || ""}`;
+function openPeers(gid, name) {
+  peersGid = gid; $("#peersTitle").textContent = `Peers · ${name || S.rows.get(gid)?.d?.name || ""}`;
   $("#pBody").replaceChildren(); $("#pFoot").textContent = "";
   $("#peersDlg").showModal(); clearTimeout(peersTimer); loadPeers();
 }
@@ -768,7 +1033,7 @@ drop.addEventListener("drop", ev => takeFiles(ev.dataTransfer.files));
 document.addEventListener("dragover", ev => ev.preventDefault());
 document.addEventListener("drop", ev => {           // dropping anywhere opens Add
   ev.preventDefault();
-  if ($("#addDlg").open) return;
+  if ($("#addDlg").open || $("#seedDlg").open) return;
   const text = ev.dataTransfer.getData("text/uri-list") || ev.dataTransfer.getData("text/plain");
   openAdd(text || ""); if (ev.dataTransfer.files.length) takeFiles(ev.dataTransfer.files);
 });

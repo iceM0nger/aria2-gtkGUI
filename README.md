@@ -61,7 +61,14 @@ The page has the same banner, tabs and rows as the desktop app. It can:
 - add links, magnets, `.torrent` and `.metalink` files, by pasting, drag-and-drop or file picker;
 - choose which files of a torrent to download;
 - set speed limits per download (right-click, or long-press on a phone);
-- show peers with country flags, and the free space on the server.
+- show peers with country flags, and the free space on the server;
+- **Seeding** tab: seed your own torrents (upload the `.torrent`, pick the folder that holds
+  the data), each with its own upload limit; seeds start again after a restart;
+- **Create** tab: make a `.torrent` from a folder or file on the server (with your tracker,
+  or DHT only, public or private), download it or copy its magnet, and start seeding it.
+  This is built in, so the server doesn't need `mktorrent`.
+
+When the web UI runs inside the desktop app, these two tabs use the app's own Seeding list.
 
 **Security:**
 - **Password sign-in:** passwords are stored as a PBKDF2 hash, and sign-ins last 30 days.

@@ -4162,6 +4162,26 @@ WEB_DATA = DATA_DIR / "web"          # web UI password hash and sign-ins
 WEB_PORT = 6880
 
 
+def on_main(fn, *args, timeout=10):
+    """Run fn on the GTK main thread from a web UI thread; returns its result or raises."""
+    done, box = threading.Event(), {}
+
+    def run():
+        try:
+            box["result"] = fn(*args)
+        except Exception as e:  # noqa: BLE001
+            box["error"] = e
+        done.set()
+        return False
+
+    GLib.idle_add(run)
+    if not done.wait(timeout):
+        raise TimeoutError("The app is busy, try again")
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def load_server_module():
     """aria2gtk-server.py (next to this file) holds the web UI's server code; the app reuses
     it with its own aria2c, so the browser page and the headless server stay identical."""
@@ -4246,6 +4266,62 @@ class WebUI:
                 r = mod.Aria2.__new__(mod.Aria2)
                 r.url, r.token = live.url, live.token
                 return r
+
+            # The page's Seeding and Create tabs work on the app's own Seeding tab.
+            torrent_dir = property(lambda self: Path(win.settings.get(
+                "torrent_dir", os.path.expanduser("~/torrents"))).expanduser())
+
+            def seed_entries(self):
+                return on_main(lambda: [
+                    {"torrent": s["torrent"], "source": s["source"], "want": s["want"],
+                     "upload_limit": s.get("upload_limit"), "hash": s["hash"] or "",
+                     "name": s["name"],
+                     "error": s["row"].status_text if s["row"].error else ""}
+                    for s in win.seeding.seeds])
+
+            def _gtk_seed(self, info_hash):
+                for s in win.seeding.seeds:
+                    if s["hash"] == info_hash:
+                        return s
+                raise KeyError("That seed is not on the list any more")
+
+            def seed_add(self, torrent, source):
+                meta = torrent_meta(torrent)
+                if not meta:
+                    raise ValueError("That is not a valid .torrent file")
+                if any(s["hash"] == meta[0] for s in self.seed_entries()):
+                    raise ValueError("This torrent is already on the list")
+                on_main(win.seeding.add_seed, str(torrent), str(source))
+
+            def seed_toggle(self, info_hash):
+                on_main(lambda: win.seeding.toggle(self._gtk_seed(info_hash)))
+
+            def seed_remove(self, info_hash):
+                on_main(lambda: win.seeding.remove(self._gtk_seed(info_hash)))
+
+            def seed_limit(self, info_hash, kib):
+                on_main(lambda: win.seeding.set_seed_limit(self._gtk_seed(info_hash), kib))
+
+            def seed_all(self, run):
+                on_main(win.seeding.start_all if run else win.seeding.pause_all)
+
+            def resume_seeds(self):
+                pass                      # the app does this itself
+
+            def create_defaults(self):
+                s = win.settings
+                return {"host": s.get("tracker_host", ""),
+                        "port": str(s.get("tracker_port", "6969")),
+                        "extra": s.get("extra_trackers", ""),
+                        "private": bool(s.get("private", True)), "piece": int(s.get("piece", 0))}
+
+            def save_create_defaults(self, d):
+                def save():
+                    win.settings.update(tracker_host=d["host"], tracker_port=d["port"],
+                                        extra_trackers=d["extra"], private=d["private"],
+                                        piece=d["piece"])
+                    save_settings(win.settings)
+                on_main(save)
 
         port = int(win.settings.get("web_port", WEB_PORT))
         try:

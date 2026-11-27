@@ -494,6 +494,155 @@ def bitfield_fraction(bitfield, pieces):
 _config_lock = threading.Lock()
 
 
+# ---------------------------------------------------------------- torrents ---
+
+PIECE_CHOICES = ["Auto (recommended)", "256 KiB", "512 KiB", "1 MiB", "2 MiB",
+                 "4 MiB", "8 MiB", "16 MiB", "32 MiB"]
+PIECE_EXPS = [None, 18, 19, 20, 21, 22, 23, 24, 25]
+
+
+def bdecode(data, i=0):
+    """Minimal bencode decoder. Dicts get b"__info_span__" = (start, end) of an info value."""
+    c = data[i:i + 1]
+    if c == b"i":
+        end = data.index(b"e", i)
+        return int(data[i + 1:end]), end + 1
+    if c == b"l":
+        i, out = i + 1, []
+        while data[i:i + 1] != b"e":
+            value, i = bdecode(data, i)
+            out.append(value)
+        return out, i + 1
+    if c == b"d":
+        i, out = i + 1, {}
+        while data[i:i + 1] != b"e":
+            key, i = bdecode(data, i)
+            start = i
+            out[key], i = bdecode(data, i)
+            if key == b"info":
+                out[b"__info_span__"] = (start, i)
+        return out, i + 1
+    colon = data.index(b":", i)
+    start = colon + 1
+    end = start + int(data[i:colon])
+    return data[start:end], end
+
+
+def bencode(v):
+    if isinstance(v, int):
+        return b"i%de" % v
+    if isinstance(v, str):
+        v = v.encode("utf-8", "surrogateescape")
+    if isinstance(v, bytes):
+        return b"%d:%s" % (len(v), v)
+    if isinstance(v, list):
+        return b"l" + b"".join(bencode(x) for x in v) + b"e"
+    if isinstance(v, dict):
+        keys = sorted(v, key=lambda k: k.encode() if isinstance(k, str) else k)
+        return b"d" + b"".join(bencode(k) + bencode(v[k]) for k in keys) + b"e"
+    raise TypeError(f"cannot bencode {type(v).__name__}")
+
+
+def torrent_meta_bytes(data):
+    """(v1 info hash as lowercase hex, top-level name) of .torrent bytes, or None."""
+    try:
+        top, _ = bdecode(data)
+        start, end = top[b"__info_span__"]
+        info = top[b"info"]
+        name = info.get(b"name.utf-8") or info.get(b"name") or b""
+        return hashlib.sha1(data[start:end]).hexdigest(), name.decode("utf-8", "replace")
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+
+def torrent_meta(path):
+    try:
+        return torrent_meta_bytes(Path(path).read_bytes())
+    except OSError:
+        return None
+
+
+def auto_exp(size):
+    if size <= 1 << 30:
+        return 20      # 1 MiB
+    if size <= 10 << 30:
+        return 22      # 4 MiB
+    if size <= 100 << 30:
+        return 23      # 8 MiB
+    return 24          # 16 MiB
+
+
+def magnet_of(info_hash, name, trackers):
+    q = f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(name)}"
+    return q + "".join(f"&tr={urllib.parse.quote(t, safe='')}" for t in trackers)
+
+
+def make_torrent(src, trackers, exp=None, private=False, progress=None):
+    """Build a v1 .torrent for a file or folder in pure Python (no mktorrent needed).
+    Returns (torrent bytes, info hash)."""
+    src = Path(src)
+    if src.is_file():
+        files = [(src, [], src.stat().st_size)]
+    elif src.is_dir():
+        files = []
+        for root, dirs, names in os.walk(src):
+            dirs.sort()
+            for n in sorted(names):
+                p = Path(root) / n
+                if p.is_file():
+                    files.append((p, list(p.relative_to(src).parts), p.stat().st_size))
+    else:
+        raise FileNotFoundError(f"{src} is not there")
+    total = sum(f[2] for f in files)
+    if not total:
+        raise ValueError("Nothing to share: no data in it")
+    plen = 1 << (exp or auto_exp(total))
+    pieces, h, filled, done, last = [], hashlib.sha1(), 0, 0, 0.0
+    for path, _parts, size in files:
+        left = size
+        with open(path, "rb") as f:
+            while left:
+                chunk = f.read(min(4 << 20, left))
+                if not chunk:
+                    raise OSError(f"{path.name} got smaller while it was read")
+                left -= len(chunk)
+                mv = memoryview(chunk)
+                while mv:
+                    take = min(len(mv), plen - filled)
+                    h.update(mv[:take])
+                    filled += take
+                    mv = mv[take:]
+                    if filled == plen:
+                        pieces.append(h.digest())
+                        h, filled = hashlib.sha1(), 0
+                done += len(chunk)
+                if progress and time.monotonic() - last > 0.3:
+                    last = time.monotonic()
+                    progress(done / total)
+    if filled:
+        pieces.append(h.digest())
+    info = {"name": src.name, "piece length": plen, "pieces": b"".join(pieces)}
+    if src.is_file():
+        info["length"] = total
+    else:
+        info["files"] = [{"length": size, "path": parts} for _p, parts, size in files]
+    if private:
+        info["private"] = 1
+    meta = {"info": info, "created by": f"aria2gtk {VERSION}", "creation date": int(time.time())}
+    if trackers:
+        meta["announce"] = trackers[0]
+        if len(trackers) > 1:
+            meta["announce-list"] = [[t] for t in trackers]
+    if progress:
+        progress(1.0)
+    return bencode(meta), hashlib.sha1(bencode(info)).hexdigest()
+
+
+def safe_name(name):
+    name = re.sub(r"[/\\\x00-\x1f]", "_", name).strip(". ") or "torrent"
+    return name[:200]
+
+
 def load_config():
     try:
         return json.loads(CONFIG.read_text(encoding="utf-8"))
@@ -593,6 +742,9 @@ class Engine:
         self.lock = threading.Lock()
         self.stopping = False
         self.tidied = set()
+        self.seed_status = {}     # info hash -> (gid, status) from the last state()
+        self.seed_errors = {}
+        self.job = {}
 
     def start(self):
         trim_log()
@@ -659,6 +811,8 @@ class Engine:
                 try:
                     with self.lock:
                         self.start()
+                    self.seed_status = {}
+                    self.resume_seeds()
                 except Exception as e:  # noqa: BLE001
                     print(f"could not restart aria2c: {e}", flush=True)
                     time.sleep(10)
@@ -690,7 +844,13 @@ class Engine:
         items = []
         drop = self.cfg.setdefault("drop_gids", [])
         dirty = False
+        seeds = self.seed_entries()
+        own = {s["hash"] for s in seeds if s["hash"]}
+        seed_items = {}
         for d in [*active, *waiting, *stopped]:
+            if d.get("infoHash") in own:
+                seed_items.setdefault(d["infoHash"], d)   # newest first: active, waiting, stopped
+                continue
             if is_metadata_done(d):                       # internal magnet step: never shown
                 if d["gid"] not in self.tidied:
                     self.tidied.add(d["gid"])
@@ -711,8 +871,10 @@ class Engine:
             disk = {"free": usage.free, "total": usage.total}
         except OSError:
             disk = {}
+        self.seed_status = {h: (d["gid"], d["status"]) for h, d in seed_items.items()}
         return {"items": items, "stat": stat, "disk": disk, "dir": self.dir,
-                "version": self.version, "server": VERSION}
+                "seeds": [self.seed_view(s, seed_items.get(s["hash"])) for s in seeds],
+                "job": self.job, "version": self.version, "server": VERSION}
 
     def peers(self, gid):
         status = self.rpc.call("aria2.tellStatus", gid, ["numPieces", "bittorrent", "status"])
@@ -734,16 +896,22 @@ class Engine:
                         "country": f"{country} ({iso})" if iso else ""})
         return {"peers": out, "geo": bool(db), "credit": GEO_CREDIT if db else ""}
 
-    def subdirs(self, rel):
+    def subdirs(self, rel, files=False):
         base = Path(self.dir)
         target = self.inside(rel)
+        names, fnames = [], []
         try:
-            names = sorted(e.name for e in os.scandir(target)
-                           if e.is_dir() and not e.name.startswith("."))
+            for e in os.scandir(target):
+                if e.name.startswith("."):
+                    continue
+                if e.is_dir():
+                    names.append(e.name)
+                elif files and e.is_file():
+                    fnames.append(e.name)
         except OSError:
-            names = []
+            pass
         return {"base": str(base), "path": str(target.relative_to(base)) if target != base else "",
-                "dirs": names[:500]}
+                "dirs": sorted(names)[:500], "files": sorted(fnames)[:500]}
 
     def inside(self, path):
         """A folder below the download folder (absolute or relative); refuses ../ escapes."""
@@ -753,6 +921,218 @@ class Engine:
         if target != base and base not in target.parents:
             raise PermissionError("Folders must be inside the download folder")
         return target
+
+    # -- your own seeds (the Seeding tab) ---------------------------------------
+    # Headless: kept in server.json. The desktop app overrides these to use its Seeding tab.
+
+    @property
+    def torrent_dir(self):
+        return DATA_DIR / "torrents"
+
+    def seed_entries(self):
+        """[{torrent, source, want, upload_limit, hash, name, error}] of your seeds."""
+        out = []
+        for s in self.cfg.setdefault("seeds", []):
+            if not s.get("hash"):
+                s["hash"], s["name"] = torrent_meta(s["torrent"]) or ("", "")
+            out.append({**s, "error": self.seed_errors.get(s["hash"], "")})
+        return out
+
+    def _seed(self, info_hash):
+        for s in self.cfg.setdefault("seeds", []):
+            if s.get("hash") == info_hash:
+                return s
+        raise KeyError("That seed is not on the list any more")
+
+    def seed_options(self, src, upload_limit):
+        return {"dir": os.path.dirname(src), "check-integrity": "true", "seed-ratio": "0.0",
+                "seed-time": SEED_FOREVER, "rpc-save-upload-metadata": "false",
+                "max-upload-limit": f"{upload_limit}K" if upload_limit else "0"}
+
+    def seed_start(self, s):
+        h = s["hash"]
+        self.seed_errors.pop(h, None)
+        src = s["source"].rstrip("/")
+        try:
+            data = Path(s["torrent"]).read_bytes()
+        except OSError:
+            self.seed_errors[h] = "Torrent file not found"
+            return
+        if not os.path.exists(src):
+            self.seed_errors[h] = "Original data not found"
+            return
+        s["want"] = True
+        save_config(self.cfg)
+        try:
+            self.rpc.call("aria2.addTorrent", base64.b64encode(data).decode(), [],
+                          self.seed_options(src, s.get("upload_limit")), timeout=60)
+        except Exception as e:  # noqa: BLE001
+            if "already" not in str(e).lower():
+                self.seed_errors[h] = str(e)
+                return
+            for d in self.rpc.call("aria2.tellWaiting", 0, 1000, ["gid", "infoHash", "status"]):
+                if d.get("infoHash") == h and d["status"] == "paused":
+                    self.rpc.call("aria2.unpause", d["gid"])
+
+    def resume_seeds(self):
+        for s in self.seed_entries():
+            if s.get("want") and s["hash"] and s["hash"] not in self.seed_status:
+                self.seed_start(self._seed(s["hash"]))
+
+    def seed_add(self, torrent, source):
+        meta = torrent_meta(torrent)
+        if not meta:
+            raise ValueError("That is not a valid .torrent file")
+        seeds = self.cfg.setdefault("seeds", [])
+        if any(s.get("hash") == meta[0] for s in seeds):
+            raise ValueError("This torrent is already on the list")
+        seeds[:] = [s for s in seeds if s["torrent"] != str(torrent)]   # same file, new content
+        s = {"torrent": str(torrent), "source": str(source), "want": True,
+             "hash": meta[0], "name": meta[1]}
+        seeds.append(s)
+        save_config(self.cfg)
+        self.seed_start(s)
+
+    def seed_toggle(self, info_hash):
+        s = self._seed(info_hash)
+        gid, status = self.seed_status.get(info_hash, (None, ""))
+        if gid and status in ("active", "waiting"):
+            s["want"] = False
+            save_config(self.cfg)
+            self.rpc.call("aria2.forcePause", gid)
+        elif gid and status == "paused":
+            s["want"] = True
+            save_config(self.cfg)
+            self.rpc.call("aria2.unpause", gid)
+        else:
+            if gid:
+                try:
+                    self.rpc.call("aria2.removeDownloadResult", gid)
+                except Exception:  # noqa: BLE001
+                    pass
+            self.seed_start(s)
+
+    def seed_remove(self, info_hash):
+        s = self._seed(info_hash)
+        gid, _status = self.seed_status.pop(info_hash, (None, ""))
+        self.cfg["seeds"].remove(s)
+        self.seed_errors.pop(info_hash, None)
+        save_config(self.cfg)
+        if gid:
+            self._drop_gid(gid)
+
+    def _drop_gid(self, gid):
+        def work():
+            try:
+                self.rpc.call("aria2.forceRemove", gid)
+                for _ in range(50):
+                    if self.rpc.call("aria2.tellStatus", gid, ["status"])["status"] == "removed":
+                        break
+                    time.sleep(0.1)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.rpc.call("aria2.removeDownloadResult", gid)
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def seed_limit(self, info_hash, kib):
+        s = self._seed(info_hash)
+        s["upload_limit"] = int(kib)
+        save_config(self.cfg)
+        gid, _status = self.seed_status.get(info_hash, (None, ""))
+        if gid:
+            self.rpc.call("aria2.changeOption", gid,
+                          {"max-upload-limit": f"{int(kib)}K" if kib else "0"})
+
+    def seed_all(self, run):
+        for s in self.seed_entries():
+            gid, status = self.seed_status.get(s["hash"], (None, ""))
+            if run and status not in ("active", "waiting"):
+                self.seed_toggle(s["hash"])
+            elif not run and status in ("active", "waiting"):
+                self.seed_toggle(s["hash"])
+
+    # -- making torrents (the Create tab) --------------------------------------
+
+    def create_defaults(self):
+        return dict({"host": "", "port": "6969", "extra": "", "private": False, "piece": 0},
+                    **self.cfg.get("create", {}))
+
+    def save_create_defaults(self, d):
+        self.cfg["create"] = d
+        save_config(self.cfg)
+
+    def create(self, body):
+        if self.job.get("running"):
+            raise ValueError("A torrent is being made already")
+        src = self.inside(body.get("source") or "")
+        if src == Path(self.dir):
+            raise ValueError("Choose a folder or file inside the download folder")
+        if not src.exists():
+            raise ValueError("That folder or file is not there")
+        host = str(body.get("host") or "").strip()
+        port = str(body.get("port") or "6969").strip()
+        extra = str(body.get("extra") or "").split()
+        private = bool(body.get("private"))
+        piece = int(body.get("piece") or 0)
+        if piece not in range(len(PIECE_EXPS)):
+            piece = 0
+        if not re.fullmatch(r"\d{1,5}", port):
+            raise ValueError("The tracker port must be a number")
+        trackers = ([f"udp://{host}:{port}/announce"] if host else []) + \
+            [t for t in extra if re.match(r"^(udp|https?|wss?)://", t)]
+        if private and not trackers:
+            raise ValueError("A private torrent needs a tracker: enter your IP or domain")
+        self.save_create_defaults({"host": host, "port": port, "extra": " ".join(extra),
+                                   "private": private, "piece": piece})
+        out = Path(self.torrent_dir) / f"{safe_name(src.name)}.torrent"
+        job = {"running": True, "progress": 0.0, "name": src.name, "error": "",
+               "source": str(src), "torrent": "", "magnet": "", "hash": "", "private": private}
+        self.job = job
+
+        def work():
+            try:
+                data, info_hash = make_torrent(src, trackers, PIECE_EXPS[piece], private,
+                                               lambda f: job.__setitem__("progress", f))
+                Path(self.torrent_dir).mkdir(parents=True, exist_ok=True)
+                tmp = out.with_suffix(".part")
+                tmp.write_bytes(data)
+                tmp.replace(out)
+                job.update(torrent=str(out), hash=info_hash,
+                           magnet="" if private else magnet_of(info_hash, src.name, trackers))
+            except Exception as e:  # noqa: BLE001
+                job["error"] = str(e)
+            job["running"] = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
+    def torrent_file(self, info_hash):
+        """Path of a .torrent the page may download: a seed's, or the one just made."""
+        if self.job.get("hash") == info_hash and self.job.get("torrent"):
+            return Path(self.job["torrent"])
+        for s in self.seed_entries():
+            if s["hash"] == info_hash:
+                return Path(s["torrent"])
+        raise KeyError("No such torrent")
+
+    def seed_view(self, s, d):
+        """What the page shows for one of your seeds (d: its aria2 status, or None)."""
+        v = {"id": s["hash"], "name": s.get("name") or Path(s["source"]).name,
+             "source": s["source"], "want": bool(s.get("want")),
+             "limit": s.get("upload_limit"), "error": s.get("error") or "", "status": "stopped"}
+        if d:
+            v.update(gid=d["gid"], status=d["status"], up=int(d.get("uploadSpeed") or 0),
+                     peers=int(d.get("connections") or 0), sent=int(d.get("uploadLength") or 0),
+                     total=int(d.get("totalLength") or 0),
+                     verified=int(d.get("verifiedLength") or 0),
+                     pending=d.get("verifyIntegrityPending") == "true",
+                     seeder=d.get("seeder") == "true")
+            if d["status"] == "error":
+                v["error"] = d.get("errorMessage") or "error"
+        return v
 
 
 def slim(d):
@@ -878,14 +1258,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"files": self.engine.rpc.call("aria2.getFiles",
                                                                      q.get("gid", ""))})
             if url.path == "/api/dirs":
-                return self.send_json(self.engine.subdirs(q.get("path", "")))
+                return self.send_json(self.engine.subdirs(q.get("path", ""), q.get("files") == "1"))
+            if url.path == "/api/create":
+                return self.send_json({"job": self.engine.job,
+                                       "defaults": self.engine.create_defaults(),
+                                       "pieces": PIECE_CHOICES})
+            if url.path == "/api/torrent":
+                return self.send_torrent(self.engine.torrent_file(q.get("id", "")))
             if url.path == "/api/settings":
                 return self.send_json(self.settings())
         except PermissionError as e:
             return self.send_json({"error": str(e)}, 403)
+        except KeyError as e:
+            return self.send_json({"error": e.args[0] if e.args else "not found"}, 404)
         except Exception as e:  # noqa: BLE001
             return self.send_json({"error": str(e)}, 502)
         return self.send_json({"error": "not found"}, 404)
+
+    def send_torrent(self, path):
+        body = path.read_bytes()
+        name = urllib.parse.quote(path.name)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-bittorrent")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{name}")
+        self.send_header("Content-Length", str(len(body)))
+        self.security_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_file(self, path, ctype):
         try:
@@ -930,8 +1329,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"message": self.engine.update_geo(force=True)})
             if url.path == "/api/password":
                 return self.change_password(body)
+            if url.path == "/api/seed":
+                return self.send_json(self.seed(body))
+            if url.path == "/api/create":
+                return self.send_json(self.engine.create(body))
+            if url.path == "/api/publicip":
+                with urllib.request.urlopen("https://ifconfig.me/ip", timeout=6) as r:
+                    return self.send_json({"ip": r.read(64).decode().strip()})
         except PermissionError as e:
             return self.send_json({"error": str(e)}, 403)
+        except (KeyError, ValueError) as e:
+            return self.send_json({"error": e.args[0] if e.args else "bad request"}, 400)
         except Exception as e:  # noqa: BLE001
             return self.send_json({"error": str(e)}, 502)
         return self.send_json({"error": "not found"}, 404)
@@ -1050,6 +1458,44 @@ class Handler(BaseHTTPRequestHandler):
                 errors.append(f"{name}: {e}")
         return {"added": added, "errors": errors}
 
+    def seed(self, body):
+        """Your own seeds: add (an uploaded .torrent, or the one just made), toggle, remove…"""
+        e, action, h = self.engine, body.get("action"), str(body.get("id", ""))
+        if action == "add":
+            if body.get("job"):
+                job = e.job
+                if not job.get("torrent") or job.get("running"):
+                    raise ValueError("Make a torrent first")
+                e.seed_add(job["torrent"], job["source"])
+                return {"ok": True}
+            data = base64.b64decode(str(body.get("torrent", "")), validate=True)
+            meta = torrent_meta_bytes(data)
+            if not meta:
+                raise ValueError("That is not a valid .torrent file")
+            folder = e.inside(body.get("dir") or e.dir)
+            source = folder / meta[1]
+            if not meta[1] or not source.exists():
+                raise ValueError(f"“{meta[1]}” is not in {folder}: choose the folder that holds it")
+            tdir = Path(e.torrent_dir)
+            tdir.mkdir(parents=True, exist_ok=True)
+            out = tdir / f"{safe_name(meta[1])}.torrent"
+            if out.exists() and out.read_bytes() != data:
+                out = tdir / f"{safe_name(meta[1])}-{meta[0][:8]}.torrent"
+            out.write_bytes(data)
+            e.seed_add(str(out), str(source))
+            return {"ok": True}
+        if action == "toggle":
+            e.seed_toggle(h)
+        elif action == "remove":
+            e.seed_remove(h)
+        elif action == "limit":
+            e.seed_limit(h, max(0, int(body.get("kib") or 0)))
+        elif action in ("startAll", "pauseAll"):
+            e.seed_all(action == "startAll")
+        else:
+            raise ValueError("Unknown action")
+        return {"ok": True}
+
     def settings(self):
         opts = self.engine.rpc.call("aria2.getGlobalOption")
         path = geo_path()
@@ -1130,6 +1576,7 @@ def main():
     if not geo_path() and cfg.get("geo_auto", True):
         threading.Thread(target=engine.update_geo, daemon=True).start()
     threading.Thread(target=engine.watchdog, daemon=True).start()
+    threading.Thread(target=engine.resume_seeds, daemon=True).start()
 
     scheme = "http"
     if args.cert:
