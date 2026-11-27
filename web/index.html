@@ -1082,7 +1082,7 @@ $("#settingsBtn").onclick = async () => {
     $("#bannerIn").checked = localStorage.getItem("a2g-banner") !== "0";
     $("#geoInfo").textContent = s.geo.file ? `${s.geo.file} · edition ${s.geo.edition}` : "Not downloaded yet";
     $("#geoAuto").checked = s.geo.auto;
-    $("#aboutInfo").textContent = `aria2 ${s.version} · aria2gtk-server ${s.server} · downloads in ${s.dir} · log ${s.log}`;
+    $("#aboutInfo").textContent = `aria2 ${s.version} · aria2gtk-server ${s.server}${s.os ? " · " + s.os : ""} · downloads in ${s.dir} · log ${s.log}`;
     $("#setDlg").showModal();
   } catch (e) { fail(e); }
 };

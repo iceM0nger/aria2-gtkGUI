@@ -60,6 +60,194 @@ SEED_FOREVER = "5256000"
 LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+# ----------------------------------------------------- which Linux this is ---
+# (the same block is in aria2gtk.py and aria2gtk-server.py: keep them identical)
+
+OS_RELEASE = ("/etc/os-release", "/usr/lib/os-release")
+# family: (install command, update command, {generic name: this family's package})
+# generic names: aria2, mktorrent, python3, gi (PyGObject), cairo (pycairo),
+# gi-cairo (PyGObject's cairo support), gtk4, adw (libadwaita); "gtk" means all GUI pieces
+PACKAGERS = {
+    "arch": ("sudo pacman -S --needed", "sudo pacman -Syu", {
+        "python3": "python", "gi": "python-gobject", "gi-cairo": "python-gobject",
+        "cairo": "python-cairo", "gtk4": "gtk4", "adw": "libadwaita"}),
+    "debian": ("sudo apt install", "sudo apt update && sudo apt full-upgrade", {
+        "gi": "python3-gi", "gi-cairo": "python3-gi-cairo", "cairo": "python3-cairo",
+        "gtk4": "gir1.2-gtk-4.0", "adw": "gir1.2-adw-1"}),
+    "fedora": ("sudo dnf install", "sudo dnf upgrade --refresh", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject", "cairo": "python3-cairo",
+        "gtk4": "gtk4", "adw": "libadwaita"}),
+    "suse": ("sudo zypper install", "sudo zypper dup", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject-cairo", "cairo": "python3-cairo",
+        "gtk4": "typelib-1_0-Gtk-4_0", "adw": "typelib-1_0-Adw-1"}),
+    "alpine": ("sudo apk add", "sudo apk upgrade", {
+        "gi": "py3-gobject3", "gi-cairo": "py3-gobject3", "cairo": "py3-cairo",
+        "gtk4": "gtk4.0", "adw": "libadwaita"}),
+    "void": ("sudo xbps-install -S", "sudo xbps-install -Su", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject", "cairo": "python3-cairo",
+        "gtk4": "gtk4", "adw": "libadwaita"}),
+    "gentoo": ("sudo emerge --ask", "sudo emerge --ask -uDN @world", {
+        "aria2": "net-misc/aria2", "mktorrent": "net-p2p/mktorrent",
+        "python3": "dev-lang/python", "gi": "dev-python/pygobject",
+        "gi-cairo": "dev-python/pygobject", "cairo": "dev-python/pycairo",
+        "gtk4": "gui-libs/gtk", "adw": "gui-libs/libadwaita"}),
+}
+FAMILY_OF = {"arch": "arch", "debian": "debian", "ubuntu": "debian", "fedora": "fedora",
+             "rhel": "fedora", "centos": "fedora", "suse": "suse", "opensuse": "suse",
+             "alpine": "alpine", "void": "void", "gentoo": "gentoo"}
+GUI_PACKAGES = ("gi", "gi-cairo", "cairo", "gtk4", "adw")
+MIN_GTK, MIN_ADW, MIN_PYTHON = (4, 16), (1, 6), (3, 10)
+
+
+def os_info(paths=OS_RELEASE):
+    """{"name": "CachyOS Linux", "id": "cachyos", "family": "arch" or ""} from os-release."""
+    fields = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and not key.startswith("#"):
+                        fields[key] = value.strip().strip("\"'")
+            break
+        except OSError:
+            continue
+    ids = [fields.get("ID", "").lower()] + fields.get("ID_LIKE", "").lower().split()
+    family = ""
+    for i in ids:
+        family = FAMILY_OF.get(i) or FAMILY_OF.get(i.split("-")[0], "")
+        if family:
+            break
+    name = fields.get("PRETTY_NAME") or fields.get("NAME") or "Linux"
+    return {"name": name, "id": ids[0] or "linux", "family": family}
+
+
+def _sudo(cmd):
+    return cmd.replace("sudo ", "") if os.geteuid() == 0 else cmd   # root (an LXC): no sudo
+
+
+def install_hint(*packages, info=None):
+    """The command that installs these packages here, e.g. "sudo apt install aria2"."""
+    info = info or os_info()
+    cmd, _upd, names = PACKAGERS.get(info["family"], (None, None, {}))
+    wanted = []
+    for p in packages:
+        for g in (GUI_PACKAGES if p == "gtk" else (p,)):
+            if names.get(g, g) not in wanted:
+                wanted.append(names.get(g, g))
+    if not cmd:
+        return f"install {', '.join(wanted)} with your package manager"
+    return _sudo(f"{cmd} {' '.join(wanted)}")
+
+
+def update_hint(info=None):
+    info = info or os_info()
+    upd = PACKAGERS.get(info["family"], (None, None, {}))[1]
+    return _sudo(upd) if upd else "update your system with your package manager"
+
+
+def _ver(t):
+    return ".".join(map(str, t))
+
+
+def check_deps(gui=True):
+    """Everything the app needs, checked: [{name, why, kind, found, ok, old, package}].
+    kind: "core" (nothing works without it), "gui" (the window), "optional"."""
+    out = []
+
+    def add(name, why, kind, package, found="", ok=True, old=False):
+        out.append({"name": name, "why": why, "kind": kind, "package": package,
+                    "found": found, "ok": ok, "old": old})
+
+    py = sys.version_info[:3]
+    add("Python", "running the app", "core", "python3", _ver(py), py[:2] >= MIN_PYTHON,
+        py[:2] < MIN_PYTHON)
+    exe = shutil.which("aria2c")
+    version = ""
+    if exe:
+        try:
+            first = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                   timeout=5).stdout.split("\n")[0]
+            version = first.split()[-1] if first else ""
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    add("aria2", "downloads, torrents and seeding", "core", "aria2", version, bool(exe))
+    if gui:
+        try:
+            import gi
+            add("PyGObject", "the window (Python bindings for GTK)", "gui", "gi", gi.__version__)
+        except ImportError:
+            gi = None
+            add("PyGObject", "the window (Python bindings for GTK)", "gui", "gi", ok=False)
+        try:
+            import cairo
+            add("pycairo", "drawing the header banner", "gui", "cairo", cairo.version)
+        except ImportError:
+            add("pycairo", "drawing the header banner", "gui", "cairo", ok=False)
+        if gi:
+            try:
+                gi.require_foreign("cairo")
+                add("PyGObject cairo support", "drawing inside GTK", "gui", "gi-cairo", "yes")
+            except (ImportError, AttributeError):
+                add("PyGObject cairo support", "drawing inside GTK", "gui", "gi-cairo", ok=False)
+            for ns, label, why, pkg, need in (("Gtk", "GTK", "the window", "gtk4", MIN_GTK),
+                                              ("Adw", "libadwaita", "the GNOME look", "adw",
+                                               MIN_ADW)):
+                try:
+                    gi.require_version(ns, "4.0" if ns == "Gtk" else "1")
+                    mod = getattr(__import__("gi.repository", fromlist=[ns]), ns)
+                    have = (mod.get_major_version(), mod.get_minor_version(),
+                            mod.get_micro_version())
+                    add(f"{label} {_ver(need)}+", why, "gui", pkg, _ver(have),
+                        have[:2] >= need, have[:2] < need)
+                except (ImportError, ValueError):
+                    add(f"{label} {_ver(need)}+", why, "gui", pkg, ok=False)
+        else:
+            add(f"GTK {_ver(MIN_GTK)}+", "the window", "gui", "gtk4", ok=False)
+            add(f"libadwaita {_ver(MIN_ADW)}+", "the GNOME look", "gui", "adw", ok=False)
+        add("mktorrent", "making torrents on the Create tab", "optional", "mktorrent",
+            "yes" if shutil.which("mktorrent") else "", bool(shutil.which("mktorrent")))
+    return out
+
+
+def deps_missing(report, kinds=("core", "gui", "optional")):
+    return [d for d in report if not d["ok"] and d["kind"] in kinds]
+
+
+def deps_guide(report, info=None, kinds=("core", "gui", "optional"), items=True):
+    """Text guide: what is missing or too old here and the commands that fix it."""
+    info = info or os_info()
+    bad = deps_missing(report, kinds)
+    if not bad:
+        return ""
+    lines = []
+    for d in bad if items else ():
+        state = f"{d['found']} is too old" if d["old"] else "missing"
+        extra = " (optional)" if d["kind"] == "optional" else ""
+        lines.append(f"  ✗ {d['name']}: {state}, needed for {d['why']}{extra}")
+    if lines:
+        lines.append("")
+    new = [d["package"] for d in bad if not d["old"]]
+    if new:
+        lines.append(f"Install with:\n  {install_hint(*new, info=info)}")
+    if any(d["old"] for d in bad):
+        lines.append(f"Update your system for newer versions:\n  {update_hint(info)}")
+    return "\n".join(lines)
+
+
+def deps_report(report, info=None):
+    """Full text report (for --check and About → Troubleshooting)."""
+    info = info or os_info()
+    lines = [f"System: {info['name']} (id {info['id']}, family {info['family'] or 'unknown'})"]
+    for d in report:
+        mark = "✓" if d["ok"] else "✗"
+        found = d["found"] if d["ok"] else (f"{d['found']}, too old" if d["old"] else "missing")
+        opt = ", optional" if d["kind"] == "optional" else ""
+        lines.append(f"  {mark} {d['name']:<26} {found:<16} {d['why']}{opt}")
+    guide = deps_guide(report, info, items=False)
+    return "\n".join(lines) + ("\n\n" + guide if guide else "\n\nEverything needed is installed.")
+
+
 def set_data_dir(path):
     global DATA_DIR, SESSION, LOG, CONFIG, GEO_DB
     DATA_DIR = Path(path).expanduser().resolve()
@@ -752,7 +940,7 @@ class Engine:
         save_config(self.cfg)
         exe = shutil.which("aria2c")
         if not exe:
-            raise SystemExit("aria2c not found: install the aria2 package")
+            raise SystemExit(f"aria2c not found. Install it: {install_hint('aria2')}")
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         Path(self.dir).mkdir(parents=True, exist_ok=True)
         SESSION.touch()
@@ -1503,7 +1691,7 @@ class Handler(BaseHTTPRequestHandler):
                 "dir": self.engine.dir, "version": self.engine.version, "server": VERSION,
                 "geo": {"file": path.name if path else "", "edition": geo_edition() if path else "",
                         "auto": self.cfg.get("geo_auto", True), "credit": GEO_CREDIT},
-                "log": str(LOG)}
+                "log": str(LOG), "os": os_info()["name"]}
 
     def change_settings(self, body):
         if "geo_auto" in body:
@@ -1558,6 +1746,10 @@ def main():
         (DATA_DIR / "sessions.json").unlink(missing_ok=True)    # sign out every browser
         print(f"Password saved in {CONFIG}; every browser has to sign in again")
         return
+    report = check_deps(gui=False)
+    if deps_missing(report, ("core",)):
+        raise SystemExit(f"Can't start on {os_info()['name']}:\n"
+                         f"{deps_guide(report, kinds=('core',))}")
     if not cfg.get("password"):
         pw = secrets.token_urlsafe(9)
         cfg["password"] = hash_password(pw)
@@ -1592,7 +1784,7 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     host = lan_addresses()[0] if args.bind in ("0.0.0.0", "::") else args.bind
-    print(f"aria2 {engine.version} running, downloads in {engine.dir}", flush=True)
+    print(f"aria2 {engine.version} on {os_info()['name']}, downloads in {engine.dir}", flush=True)
     print(f"Web UI: {scheme}://{host}:{args.port}/", flush=True)
     try:
         httpd.serve_forever()

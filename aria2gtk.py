@@ -31,20 +31,213 @@ import urllib.request
 from pathlib import Path
 
 
+# ----------------------------------------------------- which Linux this is ---
+# (the same block is in aria2gtk.py and aria2gtk-server.py: keep them identical)
+
+OS_RELEASE = ("/etc/os-release", "/usr/lib/os-release")
+# family: (install command, update command, {generic name: this family's package})
+# generic names: aria2, mktorrent, python3, gi (PyGObject), cairo (pycairo),
+# gi-cairo (PyGObject's cairo support), gtk4, adw (libadwaita); "gtk" means all GUI pieces
+PACKAGERS = {
+    "arch": ("sudo pacman -S --needed", "sudo pacman -Syu", {
+        "python3": "python", "gi": "python-gobject", "gi-cairo": "python-gobject",
+        "cairo": "python-cairo", "gtk4": "gtk4", "adw": "libadwaita"}),
+    "debian": ("sudo apt install", "sudo apt update && sudo apt full-upgrade", {
+        "gi": "python3-gi", "gi-cairo": "python3-gi-cairo", "cairo": "python3-cairo",
+        "gtk4": "gir1.2-gtk-4.0", "adw": "gir1.2-adw-1"}),
+    "fedora": ("sudo dnf install", "sudo dnf upgrade --refresh", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject", "cairo": "python3-cairo",
+        "gtk4": "gtk4", "adw": "libadwaita"}),
+    "suse": ("sudo zypper install", "sudo zypper dup", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject-cairo", "cairo": "python3-cairo",
+        "gtk4": "typelib-1_0-Gtk-4_0", "adw": "typelib-1_0-Adw-1"}),
+    "alpine": ("sudo apk add", "sudo apk upgrade", {
+        "gi": "py3-gobject3", "gi-cairo": "py3-gobject3", "cairo": "py3-cairo",
+        "gtk4": "gtk4.0", "adw": "libadwaita"}),
+    "void": ("sudo xbps-install -S", "sudo xbps-install -Su", {
+        "gi": "python3-gobject", "gi-cairo": "python3-gobject", "cairo": "python3-cairo",
+        "gtk4": "gtk4", "adw": "libadwaita"}),
+    "gentoo": ("sudo emerge --ask", "sudo emerge --ask -uDN @world", {
+        "aria2": "net-misc/aria2", "mktorrent": "net-p2p/mktorrent",
+        "python3": "dev-lang/python", "gi": "dev-python/pygobject",
+        "gi-cairo": "dev-python/pygobject", "cairo": "dev-python/pycairo",
+        "gtk4": "gui-libs/gtk", "adw": "gui-libs/libadwaita"}),
+}
+FAMILY_OF = {"arch": "arch", "debian": "debian", "ubuntu": "debian", "fedora": "fedora",
+             "rhel": "fedora", "centos": "fedora", "suse": "suse", "opensuse": "suse",
+             "alpine": "alpine", "void": "void", "gentoo": "gentoo"}
+GUI_PACKAGES = ("gi", "gi-cairo", "cairo", "gtk4", "adw")
+MIN_GTK, MIN_ADW, MIN_PYTHON = (4, 16), (1, 6), (3, 10)
+
+
+def os_info(paths=OS_RELEASE):
+    """{"name": "CachyOS Linux", "id": "cachyos", "family": "arch" or ""} from os-release."""
+    fields = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and not key.startswith("#"):
+                        fields[key] = value.strip().strip("\"'")
+            break
+        except OSError:
+            continue
+    ids = [fields.get("ID", "").lower()] + fields.get("ID_LIKE", "").lower().split()
+    family = ""
+    for i in ids:
+        family = FAMILY_OF.get(i) or FAMILY_OF.get(i.split("-")[0], "")
+        if family:
+            break
+    name = fields.get("PRETTY_NAME") or fields.get("NAME") or "Linux"
+    return {"name": name, "id": ids[0] or "linux", "family": family}
+
+
+def _sudo(cmd):
+    return cmd.replace("sudo ", "") if os.geteuid() == 0 else cmd   # root (an LXC): no sudo
+
+
+def install_hint(*packages, info=None):
+    """The command that installs these packages here, e.g. "sudo apt install aria2"."""
+    info = info or os_info()
+    cmd, _upd, names = PACKAGERS.get(info["family"], (None, None, {}))
+    wanted = []
+    for p in packages:
+        for g in (GUI_PACKAGES if p == "gtk" else (p,)):
+            if names.get(g, g) not in wanted:
+                wanted.append(names.get(g, g))
+    if not cmd:
+        return f"install {', '.join(wanted)} with your package manager"
+    return _sudo(f"{cmd} {' '.join(wanted)}")
+
+
+def update_hint(info=None):
+    info = info or os_info()
+    upd = PACKAGERS.get(info["family"], (None, None, {}))[1]
+    return _sudo(upd) if upd else "update your system with your package manager"
+
+
+def _ver(t):
+    return ".".join(map(str, t))
+
+
+def check_deps(gui=True):
+    """Everything the app needs, checked: [{name, why, kind, found, ok, old, package}].
+    kind: "core" (nothing works without it), "gui" (the window), "optional"."""
+    out = []
+
+    def add(name, why, kind, package, found="", ok=True, old=False):
+        out.append({"name": name, "why": why, "kind": kind, "package": package,
+                    "found": found, "ok": ok, "old": old})
+
+    py = sys.version_info[:3]
+    add("Python", "running the app", "core", "python3", _ver(py), py[:2] >= MIN_PYTHON,
+        py[:2] < MIN_PYTHON)
+    exe = shutil.which("aria2c")
+    version = ""
+    if exe:
+        try:
+            first = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                   timeout=5).stdout.split("\n")[0]
+            version = first.split()[-1] if first else ""
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    add("aria2", "downloads, torrents and seeding", "core", "aria2", version, bool(exe))
+    if gui:
+        try:
+            import gi
+            add("PyGObject", "the window (Python bindings for GTK)", "gui", "gi", gi.__version__)
+        except ImportError:
+            gi = None
+            add("PyGObject", "the window (Python bindings for GTK)", "gui", "gi", ok=False)
+        try:
+            import cairo
+            add("pycairo", "drawing the header banner", "gui", "cairo", cairo.version)
+        except ImportError:
+            add("pycairo", "drawing the header banner", "gui", "cairo", ok=False)
+        if gi:
+            try:
+                gi.require_foreign("cairo")
+                add("PyGObject cairo support", "drawing inside GTK", "gui", "gi-cairo", "yes")
+            except (ImportError, AttributeError):
+                add("PyGObject cairo support", "drawing inside GTK", "gui", "gi-cairo", ok=False)
+            for ns, label, why, pkg, need in (("Gtk", "GTK", "the window", "gtk4", MIN_GTK),
+                                              ("Adw", "libadwaita", "the GNOME look", "adw",
+                                               MIN_ADW)):
+                try:
+                    gi.require_version(ns, "4.0" if ns == "Gtk" else "1")
+                    mod = getattr(__import__("gi.repository", fromlist=[ns]), ns)
+                    have = (mod.get_major_version(), mod.get_minor_version(),
+                            mod.get_micro_version())
+                    add(f"{label} {_ver(need)}+", why, "gui", pkg, _ver(have),
+                        have[:2] >= need, have[:2] < need)
+                except (ImportError, ValueError):
+                    add(f"{label} {_ver(need)}+", why, "gui", pkg, ok=False)
+        else:
+            add(f"GTK {_ver(MIN_GTK)}+", "the window", "gui", "gtk4", ok=False)
+            add(f"libadwaita {_ver(MIN_ADW)}+", "the GNOME look", "gui", "adw", ok=False)
+        add("mktorrent", "making torrents on the Create tab", "optional", "mktorrent",
+            "yes" if shutil.which("mktorrent") else "", bool(shutil.which("mktorrent")))
+    return out
+
+
+def deps_missing(report, kinds=("core", "gui", "optional")):
+    return [d for d in report if not d["ok"] and d["kind"] in kinds]
+
+
+def deps_guide(report, info=None, kinds=("core", "gui", "optional"), items=True):
+    """Text guide: what is missing or too old here and the commands that fix it."""
+    info = info or os_info()
+    bad = deps_missing(report, kinds)
+    if not bad:
+        return ""
+    lines = []
+    for d in bad if items else ():
+        state = f"{d['found']} is too old" if d["old"] else "missing"
+        extra = " (optional)" if d["kind"] == "optional" else ""
+        lines.append(f"  ✗ {d['name']}: {state}, needed for {d['why']}{extra}")
+    if lines:
+        lines.append("")
+    new = [d["package"] for d in bad if not d["old"]]
+    if new:
+        lines.append(f"Install with:\n  {install_hint(*new, info=info)}")
+    if any(d["old"] for d in bad):
+        lines.append(f"Update your system for newer versions:\n  {update_hint(info)}")
+    return "\n".join(lines)
+
+
+def deps_report(report, info=None):
+    """Full text report (for --check and About → Troubleshooting)."""
+    info = info or os_info()
+    lines = [f"System: {info['name']} (id {info['id']}, family {info['family'] or 'unknown'})"]
+    for d in report:
+        mark = "✓" if d["ok"] else "✗"
+        found = d["found"] if d["ok"] else (f"{d['found']}, too old" if d["old"] else "missing")
+        opt = ", optional" if d["kind"] == "optional" else ""
+        lines.append(f"  {mark} {d['name']:<26} {found:<16} {d['why']}{opt}")
+    guide = deps_guide(report, info, items=False)
+    return "\n".join(lines) + ("\n\n" + guide if guide else "\n\nEverything needed is installed.")
+
+
+STARTUP_DEPS = None      # check_deps() result from startup, reused by the window
+
+
 def _no_gui_reason():
-    """Why the window can't open here (None if it can): no display, or no GTK installed."""
+    """Why the window can't open here (None if it can): no display, or GTK pieces missing.
+    Missing or too old pieces are listed in the terminal with the commands that fix them."""
+    global STARTUP_DEPS
     if "--headless" in sys.argv:
         return "--headless was given"
     if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
         return "no graphical display (WAYLAND_DISPLAY / DISPLAY are not set)"
-    try:
-        import cairo  # noqa: F401
-        import gi
-        gi.require_version("Gtk", "4.0")
-        gi.require_version("Adw", "1")
-        from gi.repository import Adw, Gtk  # noqa: F401
-    except (ImportError, ValueError) as e:
-        return f"GTK 4 / libadwaita are not available ({e})"
+    STARTUP_DEPS = check_deps(gui=True)
+    if deps_missing(STARTUP_DEPS, ("gui",)):
+        print(f"aria2gtk can't open its window on {os_info()['name']}:\n"
+              f"{deps_guide(STARTUP_DEPS, kinds=('gui', 'core'))}\n", file=sys.stderr, flush=True)
+        return "the GTK pieces listed above are missing"
+    if deps_missing(STARTUP_DEPS, ("core",)):
+        print(f"aria2gtk on {os_info()['name']}:\n"
+              f"{deps_guide(STARTUP_DEPS, kinds=('core',))}\n", file=sys.stderr, flush=True)
     return None
 
 
@@ -64,6 +257,10 @@ def _run_headless(reason):
 
 
 if __name__ == "__main__":
+    if "--check" in sys.argv:            # aria2gtk.py --check: what's installed, what's missing
+        _report = check_deps(gui=True)
+        print(deps_report(_report))
+        raise SystemExit(1 if deps_missing(_report, ("core", "gui")) else 0)
     _reason = _no_gui_reason()
     if _reason:
         _run_headless(_reason)
@@ -3141,7 +3338,7 @@ class CreatePage(Gtk.Box):
         host = self.host_row.get_text().strip()
         port = self.port_row.get_text().strip() or "6969"
         if not shutil.which("mktorrent"):
-            self.win.toast("mktorrent is missing: sudo pacman -S mktorrent")
+            self.win.toast(f"mktorrent is missing: {install_hint('mktorrent')}")
             return
         if not src or not os.path.exists(src):
             self.win.toast("Choose a folder or file to share")
@@ -4732,8 +4929,11 @@ class Window(Adw.ApplicationWindow):
                                             set(self.settings.pop("drop_gids", [])))
                 GLib.idle_add(self.on_started, ver)
             except FileNotFoundError:
-                GLib.idle_add(self.fatal, "aria2c Not Found",
-                              "Install the <tt>aria2</tt> package and restart.")
+                guide = deps_guide(check_deps(gui=False), kinds=("core",))
+                GLib.idle_add(self.fatal, "aria2 Is Not Installed",
+                              f"Checked on {GLib.markup_escape_text(os_info()['name'])}.\n\n<tt>"
+                              + GLib.markup_escape_text(guide)
+                              + "</tt>\n\nRun that in a terminal, then start the app again.")
             except Exception as e:  # noqa: BLE001
                 GLib.idle_add(self.fatal, "Could Not Start aria2c",
                               GLib.markup_escape_text(str(e)), bool(options))
@@ -5449,6 +5649,52 @@ class Window(Adw.ApplicationWindow):
             self.app.release()
             self.held = False
 
+    def check_system(self):
+        """Startup check: tell about missing optional tools (with the command to install them),
+        unless the user said not to for that tool."""
+        if not self.get_visible():
+            return True                  # started in the tray: ask once the window shows
+        report = STARTUP_DEPS or check_deps(gui=True)
+        skip = set(self.settings.get("deps_dismissed", []))
+        bad = [d for d in deps_missing(report, ("gui", "optional")) if d["name"] not in skip]
+        if not bad:
+            return False
+        info = os_info()
+        lines = [f"• {d['name']}: {'too old (' + d['found'] + ')' if d['old'] else 'missing'}, "
+                 f"for {d['why']}" for d in bad]
+        new = [d["package"] for d in bad if not d["old"]]
+        cmds = ([install_hint(*new, info=info)] if new else []) + \
+               ([update_hint(info)] if any(d["old"] for d in bad) else [])
+        cmd = "\n".join(cmds)
+        dlg = Adw.AlertDialog(heading="Something Is Missing",
+                              body=f"Checked on {info['name']}:\n\n" + "\n".join(lines)
+                                   + ("\n\nFix it with these commands in a terminal:" if len(cmds) > 1
+                                      else "\n\nInstall it with this command in a terminal:"))
+        box = Gtk.Box(css_classes=["card"], margin_top=4)
+        box.append(Gtk.Label(label=cmd, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, xalign=0,
+                             hexpand=True, css_classes=["monospace"], margin_top=10,
+                             margin_bottom=10, margin_start=12, margin_end=12))
+        dlg.set_extra_child(box)
+        dlg.set_prefer_wide_layout(True)
+        dlg.add_response("never", "Don't Show Again")
+        dlg.add_response("later", "Later")
+        dlg.add_response("copy", "Copy Command")
+        dlg.set_response_appearance("copy", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("copy")
+        dlg.set_close_response("later")
+
+        def on_response(_d, response):
+            if response == "copy":
+                copy_text(self, cmd)
+                self.toast("Copied: paste it in a terminal")
+            elif response == "never":
+                self.settings["deps_dismissed"] = sorted(skip | {d["name"] for d in bad})
+                save_settings(self.settings)
+
+        dlg.connect("response", on_response)
+        dlg.present(self)
+        return False
+
     def toggle_visible(self):
         if self.get_visible():
             self.set_visible(False)
@@ -5516,6 +5762,7 @@ class App(Adw.Application):
         if not self.win:
             self.win = Window(self)
             self.win.start_daemon()
+            GLib.timeout_add(800, self.win.check_system)
             if self.start_hidden:
                 self.start_hidden = False
                 self.win.start_hidden()
@@ -5555,13 +5802,19 @@ class App(Adw.Application):
             self.quit()
 
     def on_about(self, *_):
+        info = os_info()
+        aria2 = getattr(self.win, "aria2_version", "") if self.win else ""
+        debug = (deps_report(check_deps(gui=True), info)
+                 + f"\n\nKernel: {os.uname().release}\naria2 running: {aria2 or 'no'}")
         Adw.AboutDialog(
             application_name="Aria2 GTK",
             application_icon="folder-download-symbolic",
             version=VERSION,
-            comments="Downloads, torrent creation and seeding with aria2c",
+            comments=f"Downloads, torrent creation and seeding with aria2c\n"
+                     f"Running on {info['name']}",
             license_type=Gtk.License.GPL_3_0,
             website="https://github.com/iceM0nger/aria2-gtkGUI",
+            debug_info=debug,
         ).present(self.win)
 
 

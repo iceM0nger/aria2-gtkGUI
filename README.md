@@ -18,13 +18,40 @@ It starts its own private aria2c (JSON-RPC on a random localhost port, with a ra
 
 ## Requirements
 
-On Arch-based distributions:
+| Distribution | Install |
+|---|---|
+| Arch, CachyOS, Manjaro, EndeavourOS | `sudo pacman -S --needed aria2 python-gobject python-cairo gtk4 libadwaita mktorrent` |
+| Debian 13+, Ubuntu 24.04+, Mint | `sudo apt install aria2 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 mktorrent` |
+| Fedora, RHEL-likes | `sudo dnf install aria2 python3-gobject python3-cairo gtk4 libadwaita mktorrent` |
+| openSUSE | `sudo zypper install aria2 python3-gobject python3-gobject-cairo typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 mktorrent` |
+
+GTK 4.16+ and libadwaita 1.6+ are needed. `mktorrent` is only needed for creating torrents in the
+window (the web UI makes torrents without it).
+
+### System check
+
+At every start the app checks:
+- which distribution it runs on (`/etc/os-release`);
+- what it needs: aria2, Python, PyGObject, pycairo, GTK 4.16+, libadwaita 1.6+, and mktorrent
+  (optional).
+
+If something is missing or too old, it says what and gives the command for your system, for
+example `sudo pacman -S --needed mktorrent` on Arch or `sudo apt install aria2` on Debian.
+Fedora, openSUSE, Alpine, Void and Gentoo are detected too, and `sudo` is left out when running
+as root.
+
+Where it shows:
+- **Window:** a dialog with a **Copy Command** button.
+- **Terminal:** the same list and command.
+- **No window possible:** when GTK pieces are missing, it lists them, then starts the web UI.
+
+To see the full list, either run:
 
 ```bash
-sudo pacman -S --needed aria2 python-gobject python-cairo gtk4 libadwaita mktorrent
+./aria2gtk.py --check
 ```
 
-GTK 4.16+ and libadwaita 1.6+ are needed. `mktorrent` is only needed for creating torrents.
+or open **About → Troubleshooting**.
 
 ## Running
 
